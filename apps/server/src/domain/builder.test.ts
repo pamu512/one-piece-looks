@@ -108,7 +108,11 @@ describe("builder: structure invariants", () => {
     for (const category of ["lip", "cheek", "eye", "brow", "liner"] as const) {
       for (const look of buildLooks({ ...base, lock: { ...base.lock, category } })) {
         const brow = effectOf(look.effects, "eyebrows");
-        if (!brow) continue;
+        // 2026-10-05: statement ALWAYS adds brows, and a brow lock must render
+        // its locked effect. A missing eyebrows effect here is a regression
+        // (category "brow" 400s at create on live YouCam), not a skip.
+        if (look.role !== "statement" && category !== "brow") continue;
+        expect(brow).toBeDefined();
         const pattern = brow.pattern as { type: string; name: string; curvature: number; thickness: number; definition: number };
         expect(pattern.type).toBe("shape");
         expect(Number.isInteger(pattern.curvature)).toBe(true);
@@ -124,6 +128,19 @@ describe("builder: structure invariants", () => {
         // palette carries the live-required texture
         const palette = (brow.palettes as { texture: string }[])[0]!;
         expect(palette.texture).toBe("matte");
+      }
+    }
+  });
+
+  it("effect categories use the live YouCam consts (live-pinned 2026-10-05)", () => {
+    // "brow" is not an accepted category value on live YouCam; the const is
+    // "eyebrows" (400 oneOf validation otherwise). Lock categories stay ours.
+    const allowed = new Set(["skin_smooth", "lip_color", "blush", "eyebrows", "eye_shadow", "eye_liner", "eyelashes", "contour", "highlighter"]);
+    for (const category of ["lip", "cheek", "eye", "brow", "liner"] as const) {
+      for (const look of buildLooks({ ...base, lock: { ...base.lock, category } })) {
+        for (const eff of look.effects) {
+          expect(allowed.has(String(eff.category))).toBe(true);
+        }
       }
     }
   });

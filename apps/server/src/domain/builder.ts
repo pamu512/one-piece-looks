@@ -336,7 +336,10 @@ function linerEffect(pattern: string, hex: string, intensity: number): VtoEffect
 
 function browEffect(pattern: string, hex: string, intensity: number): VtoEffect {
   return {
-    category: "brow",
+    // Live engine accepts only the category const "eyebrows" (not "brow"):
+    // "brow" -> 400 oneOf validation at task create (live-pinned 2026-10-05,
+    // docs.perfectcorp.com makeup-vto effect schema).
+    category: "eyebrows",
     // Live engine rejects shape patterns that set definition without curvature
     // AND thickness (pinned 2026-10-02: definition-only -> invalid_parameter).
     pattern: {
