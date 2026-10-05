@@ -1,0 +1,283 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import Fastify from "fastify";
+import { registerRoutes } from "./routes.js";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const FIXTURE_FACE = join(dirname(fileURLToPath(import.meta.url)), "../../fixtures/face-portrait-test.jpg");
+
+// Force mock mode for contract tests.
+const cfg = { baseUrl: "https://example.test", rendersBudget: 9, mock: true };
+
+function makeApp() {
+  const app = Fastify({ bodyLimit: 20 * 1024 * 1024 });
+  registerRoutes(app, cfg);
+  return app;
+}
+
+const FACE_B64 = readFileSync(FIXTURE_FACE).toString("base64"); // real JPEG fixture
+const LOCK = {
+  category: "lip",
+  onFaceHex: "#B3122E",
+  productHex: "#C01830",
+  unverified: false,
+} as const;
+
+async function makeSession(app: ReturnType<typeof makeApp>) {
+  const res = await app.inject({ method: "POST", url: "/api/session" });
+  expect(res.statusCode).toBe(200);
+  return res.json<{ sessionId: string }>();
+}
+
+async function runFace(
+  app: ReturnType<typeof makeApp>,
+  id: string,
+  lock: unknown = LOCK,
+) {
+  return app.inject({
+    method: "POST",
+    url: `/api/session/${id}/face`,
+    payload: { faceImageBase64: FACE_B64, lock },
+  });
+}
+
+async function readySession(app: ReturnType<typeof makeApp>) {
+  const { sessionId } = await makeSession(app);
+  const face = await runFace(app, sessionId);
+  expect(face.statusCode).toBe(200);
+  return sessionId;
+}
+
+describe("session lifecycle", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  it("creates a session with a budget", async () => {
+    const res = await app.inject({ method: "POST", url: "/api/session" });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ sessionId: string; rendersBudget: number; mock: boolean }>();
+    expect(body.sessionId).toHaveLength(36);
+    expect(body.rendersBudget).toBe(9);
+    expect(body.mock).toBe(true);
+  });
+
+  it("404s unknown session", async () => {
+    const res = await app.inject({ method: "GET", url: "/api/session/nope" });
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+describe("face analysis", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  it("rejects missing image", async () => {
+    const { sessionId } = await makeSession(app);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/face`,
+      payload: { lock: LOCK },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ code: string }>().code).toBe("bad_image");
+  });
+
+  it("runs skin type and tone, returns both", async () => {
+    const { sessionId } = await makeSession(app);
+    const res = await runFace(app, sessionId);
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ skinType?: string; toneFallback: boolean; tone?: { skinColor: string } }>();
+    expect(body.skinType).toBeDefined();
+    expect(body.toneFallback).toBe(false);
+    expect(body.tone?.skinColor).toMatch(/^#[0-9a-f]{6}$/);
+  });
+
+  it("retake (same image) does not re-run analysis: idempotent result", async () => {
+    const { sessionId } = await makeSession(app);
+    const first = await runFace(app, sessionId);
+    const second = await runFace(app, sessionId);
+    expect(second.statusCode).toBe(200);
+    expect(first.json<{ skinType?: string }>().skinType).toBe(
+      second.json<{ skinType?: string }>().skinType,
+    );
+  });
+
+  it("rejects a bad lock hex", async () => {
+    const { sessionId } = await makeSession(app);
+    const res = await runFace(app, sessionId, {
+      category: "lip",
+      onFaceHex: "red",
+      productHex: "#c01830",
+      unverified: false,
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ code: string }>().code).toBe("bad_lock");
+  });
+
+  it("rejects a bad category", async () => {
+    const { sessionId } = await makeSession(app);
+    const res = await runFace(app, sessionId, {
+      category: "nails",
+      onFaceHex: "#b3122e",
+      productHex: "#c01830",
+      unverified: false,
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe("looks build", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  it("requires mood AND event (no defaults)", async () => {
+    const sessionId = await readySession(app);
+    const noMood = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { event: "Office" },
+    });
+    expect(noMood.statusCode).toBe(400);
+    expect(noMood.json<{ code: string }>().code).toBe("mood_event_required");
+
+    const noEvent = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Boss" },
+    });
+    expect(noEvent.statusCode).toBe(400);
+  });
+
+  it("rejects unknown mood/event values", async () => {
+    const sessionId = await readySession(app);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Vibing", event: "Office" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it("returns exactly three looks with roles in order", async () => {
+    const sessionId = await readySession(app);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Boss", event: "Office" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      looks: { role: string; imageUrl: string; chips: { label: string; hex: string }[] }[];
+      rendersLeft: number;
+    }>();
+    expect(body.looks.map((l) => l.role)).toEqual(["anchor", "lift", "statement"]);
+    expect(body.rendersLeft).toBe(6);
+    for (const look of body.looks) {
+      expect(look.imageUrl.startsWith("data:image/svg+xml")).toBe(true);
+      expect(look.chips[0]!.hex).toBe("#b3122e");
+    }
+  });
+
+  it("409 before face analysis", async () => {
+    const { sessionId } = await makeSession(app);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Boss", event: "Office" },
+    });
+    expect(res.statusCode).toBe(409);
+  });
+});
+
+describe("shuffle + budget", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  it("shuffle re-rolls supports, keeps lock/mood/event, draws from the same budget", async () => {
+    const sessionId = await readySession(app);
+    const build = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Soft", event: "Casual" },
+    });
+    const first = build.json<{ looks: { chips: { hex: string }[]; imageUrl: string }[]; rendersLeft: number }>();
+    expect(first.rendersLeft).toBe(6);
+
+    const shuffle = await app.inject({ method: "POST", url: `/api/session/${sessionId}/shuffle` });
+    expect(shuffle.statusCode).toBe(200);
+    const second = shuffle.json<{ looks: { chips: { hex: string }[]; imageUrl: string }[]; rendersLeft: number }>();
+    expect(second.rendersLeft).toBe(3);
+    // lock stays
+    for (const look of second.looks) expect(look.chips[0]!.hex).toBe("#b3122e");
+    // supports moved (at least one imageUrl changed)
+    const changed = second.looks.some((l, i) => l.imageUrl !== first.looks[i]!.imageUrl);
+    expect(changed).toBe(true);
+  });
+
+  it("budget exhausts after build + two shuffles", async () => {
+    const sessionId = await readySession(app);
+    await app.inject({ method: "POST", url: `/api/session/${sessionId}/looks`, payload: { mood: "Boss", event: "Office" } });
+    await app.inject({ method: "POST", url: `/api/session/${sessionId}/shuffle` });
+    await app.inject({ method: "POST", url: `/api/session/${sessionId}/shuffle` });
+    const third = await app.inject({ method: "POST", url: `/api/session/${sessionId}/shuffle` });
+    expect(third.statusCode).toBe(429);
+    expect(third.json<{ code: string }>().code).toBe("budget_exhausted");
+  });
+
+  it("mood/event change rebuilds draw from the same budget", async () => {
+    const sessionId = await readySession(app);
+    await app.inject({ method: "POST", url: `/api/session/${sessionId}/looks`, payload: { mood: "Boss", event: "Office" } });
+    const rebuild = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Sexy", event: "Night out" },
+    });
+    expect(rebuild.statusCode).toBe(200);
+    expect(rebuild.json<{ rendersLeft: number }>().rendersLeft).toBe(3);
+  });
+});
+
+describe("tone fallback picker", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  it("accepts a picker tone and then builds", async () => {
+    const { sessionId } = await makeSession(app);
+    await runFace(app, sessionId);
+    const tone = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/tone`,
+      payload: { depth: "04", temperature: "warm" },
+    });
+    expect(tone.statusCode).toBe(200);
+    const build = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Clean", event: "Errands" },
+    });
+    expect(build.statusCode).toBe(200);
+    expect(build.json<{ looks: unknown[] }>().looks).toHaveLength(3);
+  });
+
+  it("rejects a bad depth", async () => {
+    const { sessionId } = await makeSession(app);
+    await runFace(app, sessionId);
+    const res = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/tone`,
+      payload: { depth: "9", temperature: "warm" },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

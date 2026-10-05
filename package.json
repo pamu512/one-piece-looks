@@ -1,0 +1,19 @@
+{
+  "name": "one-piece-looks",
+  "private": true,
+  "version": "0.1.0",
+  "description": "One Piece. Three looks. - YouCam hackathon app",
+  "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w apps/server",
+    "test": "npm test -w apps/server",
+    "build": "npm run build -w apps/server",
+    "prove:lipstick": "node scripts/prove-lipstick.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

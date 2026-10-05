@@ -1,0 +1,324 @@
+/* One Piece Looks — hand-rolled design tokens. Dark, editorial, polish-first.
+   The accent is intentionally neutral-luxe; the user's sampled shade becomes
+   the runtime accent via --lock-hex set on :root by the app. */
+
+:root {
+  --bg: #0c0d10;
+  --bg-elev: #14151a;
+  --bg-elev-2: #1a1c23;
+  --line: rgba(255, 255, 255, 0.09);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --ink: #f4f2ee;
+  --ink-2: #b9b4ab;
+  --ink-3: #7d7a72;
+  --accent: #e0587a;
+  --accent-ink: #ffd7e0;
+  --ok: #58c99a;
+  --warn: #e8b45f;
+  --err: #ef7d84;
+  --lock-hex: #e0587a;
+  --radius-s: 10px;
+  --radius-m: 16px;
+  --radius-l: 22px;
+  --shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  --font: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "New York", "Iowan Old Style", "Palatino Linotype", Palatino,
+    Georgia, serif;
+  --tap: 44px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+#root { min-height: 100dvh; }
+
+/* ---------- app shell: phone-first ---------- */
+.shell {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding: 0 20px calc(24px + env(safe-area-inset-bottom));
+  position: relative;
+}
+
+/* subtle ambient wash tied to the lock color */
+.shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  max-width: 480px;
+  margin: 0 auto;
+  background:
+    radial-gradient(120% 44% at 50% -6%, color-mix(in srgb, var(--lock-hex) 14%, transparent), transparent 70%),
+    radial-gradient(90% 30% at 50% 108%, color-mix(in srgb, var(--lock-hex) 7%, transparent), transparent 72%);
+  pointer-events: none;
+  z-index: -1;
+  transition: background 600ms ease;
+}
+
+/* ---------- typography ---------- */
+.display {
+  font-family: var(--font-display);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.06;
+  margin: 0;
+}
+
+.eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+
+.muted { color: var(--ink-2); }
+.dim { color: var(--ink-3); }
+
+/* ---------- buttons ---------- */
+.btn {
+  font: inherit;
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  min-height: var(--tap);
+  padding: 12px 22px;
+  cursor: pointer;
+  transition: transform 120ms ease, opacity 120ms ease, border-color 120ms ease;
+  color: var(--ink);
+  background: var(--bg-elev-2);
+}
+.btn:active { transform: translateY(1px) scale(0.995); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--lock-hex) 88%, white 12%), var(--lock-hex));
+  color: #101014;
+  border-color: color-mix(in srgb, var(--lock-hex) 60%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--lock-hex) 28%, transparent);
+}
+.btn-ghost { background: transparent; border-color: var(--line-strong); }
+.btn-ghost:hover { border-color: var(--ink-3); }
+.btn-wide { width: 100%; }
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--lock-hex) 70%, white);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* ---------- chips ---------- */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 550;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-elev);
+  color: var(--ink-2);
+  border-radius: 999px;
+  padding: 9px 16px;
+  min-height: var(--tap);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.chip:hover { color: var(--ink); border-color: var(--ink-3); }
+.chip[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--lock-hex) 16%, var(--bg-elev));
+  border-color: color-mix(in srgb, var(--lock-hex) 55%, transparent);
+  color: var(--ink);
+}
+
+/* recipe chip (read-only, on looks) */
+.recipe-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  border-radius: 999px;
+  padding: 5px 12px 5px 7px;
+}
+.recipe-chip .dot {
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.25);
+  flex-shrink: 0;
+}
+
+/* ---------- lock chip ---------- */
+.lock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--lock-hex) 14%, var(--bg-elev));
+  border: 1px solid color-mix(in srgb, var(--lock-hex) 45%, transparent);
+  padding: 5px 12px 5px 6px;
+  border-radius: 999px;
+}
+.lock-chip .dot {
+  width: 17px; height: 17px; border-radius: 50%;
+  background: var(--lock-hex);
+  border: 1.5px solid rgba(255,255,255,0.35);
+}
+
+/* ---------- cards ---------- */
+.card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  padding: 18px;
+}
+
+/* ---------- capture ---------- */
+.camera-stage {
+  position: relative;
+  border-radius: var(--radius-l);
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 3 / 4;
+  border: 1px solid var(--line-strong);
+}
+.camera-stage video,
+.camera-stage canvas,
+.camera-stage img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.guide-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---------- swatches ---------- */
+.swatch-pair {
+  display: flex;
+  gap: 14px;
+  align-items: stretch;
+}
+.swatch {
+  flex: 1;
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line-strong);
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.swatch .fill { height: 76px; }
+.swatch .meta { padding: 10px 12px; }
+.swatch .hex {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+
+/* ---------- looks ---------- */
+.look-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-l);
+  overflow: hidden;
+}
+.look-card .img-wrap {
+  aspect-ratio: 4 / 5;
+  background: var(--bg-elev-2);
+  position: relative;
+}
+.look-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.look-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px 4px;
+}
+.look-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 10px 16px 16px;
+}
+
+/* skeleton shimmer (subtle) */
+.skel {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+}
+.skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.05), transparent);
+  animation: shimmer 1.4s infinite;
+}
+@keyframes shimmer { 100% { transform: translateX(100%); } }
+
+/* ---------- progress dots ---------- */
+.steps {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  padding-top: calc(14px + env(safe-area-inset-top));
+}
+.steps i {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--line-strong);
+  transition: background 200ms ease, width 200ms ease;
+}
+.steps i.on { background: color-mix(in srgb, var(--lock-hex) 80%, white 10%); width: 18px; border-radius: 3px; }
+
+/* ---------- toast / error card ---------- */
+.calm-card {
+  border: 1px solid color-mix(in srgb, var(--err) 35%, transparent);
+  background: color-mix(in srgb, var(--err) 7%, var(--bg-elev));
+  border-radius: var(--radius-m);
+  padding: 18px;
+}
+
+/* ---------- misc ---------- */
+.row { display: flex; align-items: center; gap: 10px; }
+.grow { flex: 1; }
+.spacer { flex: 1; }
+.footer-note {
+  font-size: 12.5px;
+  color: var(--ink-3);
+  text-align: center;
+  padding: 18px 12px 0;
+}
+
+.fade-in { animation: fadeUp 360ms cubic-bezier(0.22, 0.8, 0.32, 1) both; }
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}

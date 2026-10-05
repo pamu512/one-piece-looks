@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.local
+.env
+.DS_Store
+.env.*
+!.env.example
+build/
+*.tsbuildinfo
+.vite/
+.cache/
+*.log
+prove-evidence-*.jsonl
+scratch/
+uploads/
