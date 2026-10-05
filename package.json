@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "dev:server": "npm run dev -w apps/server",
-    "test": "npm test -w apps/server",
+    "test": "npm test -w apps/server && npm test -w apps/client",
     "build": "npm run build -w apps/server",
     "prove:lipstick": "node scripts/prove-lipstick.mjs"
   },

@@ -1,0 +1,120 @@
+{
+  "_meta": {
+    "source": "WFLW (mrriandmstique/wflw-wider-facial-landmarks-in-the-wild, Kaggle)",
+    "regenerate": "python scratch/train/wflw_bands.py",
+    "landmark_groups": "brows 33..50, eyes 60..75, mouth 76..95 (0-based, 98-point layout)",
+    "coords": "fractions of the annotated face rect (x/y of box, 0..1)",
+    "images_on_disk": 6551,
+    "no_em_dash": true
+  },
+  "train": {
+    "n": 7500,
+    "skipped": 0,
+    "mouth_y": {
+      "mean": 0.7471,
+      "std": 0.0625,
+      "p5": 0.6418,
+      "p95": 0.8455
+    },
+    "mouth_x": {
+      "mean": 0.5012,
+      "std": 0.1801,
+      "p5": 0.2065,
+      "p95": 0.795
+    },
+    "eye_y": {
+      "mean": 0.3859,
+      "std": 0.0706,
+      "p5": 0.2644,
+      "p95": 0.4928
+    },
+    "eye_x": {
+      "mean": 0.4962,
+      "std": 0.2492,
+      "p5": 0.1264,
+      "p95": 0.8701
+    },
+    "brow_y": {
+      "mean": 0.2965,
+      "std": 0.0803,
+      "p5": 0.1569,
+      "p95": 0.4173
+    },
+    "mouth_y_extent": {
+      "minOfMin": 0.4237,
+      "maxOfMax": 1.0,
+      "minMean": 0.6883,
+      "maxMean": 0.8215,
+      "midMean": 0.7549
+    },
+    "eye_y_extent": {
+      "minOfMin": 0.0,
+      "maxOfMax": 0.8402,
+      "minMean": 0.3359,
+      "maxMean": 0.4309,
+      "midMean": 0.3834
+    },
+    "brow_y_extent": {
+      "minOfMin": 0.0,
+      "maxOfMax": 0.7993,
+      "minMean": 0.238,
+      "maxMean": 0.3598,
+      "midMean": 0.2989
+    }
+  },
+  "test": {
+    "n": 2500,
+    "skipped": 0,
+    "mouth_y": {
+      "mean": 0.7447,
+      "std": 0.0688,
+      "p5": 0.6261,
+      "p95": 0.849
+    },
+    "mouth_x": {
+      "mean": 0.4998,
+      "std": 0.1974,
+      "p5": 0.174,
+      "p95": 0.8333
+    },
+    "eye_y": {
+      "mean": 0.3788,
+      "std": 0.0758,
+      "p5": 0.2506,
+      "p95": 0.494
+    },
+    "eye_x": {
+      "mean": 0.4949,
+      "std": 0.2538,
+      "p5": 0.1117,
+      "p95": 0.8813
+    },
+    "brow_y": {
+      "mean": 0.2885,
+      "std": 0.0855,
+      "p5": 0.1412,
+      "p95": 0.4198
+    },
+    "mouth_y_extent": {
+      "minOfMin": 0.3759,
+      "maxOfMax": 1.0,
+      "minMean": 0.6808,
+      "maxMean": 0.8229,
+      "midMean": 0.7519
+    },
+    "eye_y_extent": {
+      "minOfMin": 0.0,
+      "maxOfMax": 0.7197,
+      "minMean": 0.3289,
+      "maxMean": 0.4244,
+      "midMean": 0.3767
+    },
+    "brow_y_extent": {
+      "minOfMin": 0.0,
+      "maxOfMax": 0.6604,
+      "minMean": 0.2289,
+      "maxMean": 0.3528,
+      "midMean": 0.2909
+    }
+  }
+}

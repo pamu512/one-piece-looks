@@ -5,7 +5,7 @@ import {
   type Mood, type SessionInfo, type Tone,
 } from "./lib/types";
 import {
-  detectFace, normalizeTo45, suggestLock, type FaceLandmarks,
+  detectFaceWithModel, normalizeTo45, suggestLock, type FaceLandmarks,
 } from "./lib/face";
 import { composeShareCard, downloadBlob, shareLooksPng } from "./lib/share";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
@@ -246,13 +246,13 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
   useEffect(() => { void cam.start(); return () => cam.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const process = useCallback((src: string) => {
-    // Normalize to the shared 4:5 frame, detect once, then hand over.
+    // Normalize to the shared 4:5 frame, detect once (model when its runtime
+    // is available, heuristic otherwise), then hand over.
     const img = new Image();
     img.onload = () => {
       const c = normalizeTo45(img);
       const dataUrl = c.toDataURL("image/jpeg", 0.92);
-      const lm = detectFace(c);
-      onPhoto(dataUrl, lm);
+      void detectFaceWithModel(c).then((lm) => onPhoto(dataUrl, lm));
     };
     img.onerror = () => onPhoto(src, null);
     img.src = src;
@@ -270,7 +270,7 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
     const img = new Image();
     img.onload = () => {
       const c = normalizeTo45(img);
-      onPhoto(c.toDataURL("image/jpeg", 0.92), detectFace(c));
+      void detectFaceWithModel(c).then((lm) => onPhoto(c.toDataURL("image/jpeg", 0.92), lm));
     };
     img.onerror = () => onPhoto(src, null);
     img.src = src;

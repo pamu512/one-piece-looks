@@ -1,5 +1,6 @@
 /**
- * Client face utilities: the single geometry + the cheap landmark detector.
+ * Client face utilities: the single geometry + the face-frame-first
+ * landmark detector.
  *
  * Geometry contract (end to end): every capture is normalized to a 4:5
  * portrait frame (NORMAL_W x NORMAL_H) before sampling, locking, or
@@ -7,11 +8,30 @@
  * the lock ring, the auto-suggested lock, and the server's mock patches all
  * share one coordinate space.
  *
- * The detector is deliberately dependency-free: a skin-probability grid +
- * row/column projection localizes the face, then local redness/chroma
- * peaks find lips and dark minima find eyes. It is wrong sometimes; every
- * suggestion is one tap away from correction, which is the whole design.
+ * Detection is face-frame-first (plan 2026-10-05): a stable faceBox is
+ * decided BEFORE any lip/eye search, and the searches then happen only
+ * inside WFLW-calibrated bands of that box (see lib/faceFrame.ts). The
+ * faceBox priority ladder is: ONNX model (when onnxruntime-web and the
+ * exported model are available, lazy, offline-safe) > skin-grid heuristic >
+ * centered portrait prior. The old failure mode (skin box swallowing the
+ * bottom hand band, lip patch landing on knuckles) is structurally closed:
+ * the box is clamped out of the hand band unless the model is confident the
+ * face fills the frame, and lips/eyes are never searched outside the box.
+ *
+ * detectFace() stays synchronous and dependency-free; the optional model
+ * path is detectFaceWithModel(), an async wrapper with the same output
+ * shape (FaceLandmarks), so App.tsx can await it and fall back cleanly.
  */
+
+import {
+  BROW_MID_Y, decideFaceBox, EYE_BAND, MOUTH_BAND, eyeBand, mouthBand,
+} from "./faceFrame";
+import { detectFaceFrameModel } from "./faceModel";
+
+/** WFLW eye band midpoint (test split): fallback eye height inside faceBox. */
+const EYE_FALLBACK_Y = (EYE_BAND.y0 + EYE_BAND.y1) / 2;
+/** WFLW mouth band midpoint (test split): fallback lip height inside faceBox. */
+const MOUTH_FALLBACK_Y = (MOUTH_BAND.y0 + MOUTH_BAND.y1) / 2;
 
 export const NORMAL_W = 1000;
 export const NORMAL_H = 1250;
@@ -171,30 +191,38 @@ function polyFromBox(cx: number, cy: number, rx: number, ry: number, n = 8): Pol
 }
 
 /**
- * Detect face landmarks on the normalized 4:5 canvas. Fast (tens of ms),
- * dependency-free, and good enough to align mock patches and to pre-stamp
- * a lock ring. Returns null when no skin mass is found at all.
+ * Detect face landmarks on the normalized 4:5 canvas, face-frame-first.
+ *
+ * The faceBox is decided from the skin grid (model candidates are injected
+ * by detectFaceWithModel), clamped out of the bottom hand band, and ONLY
+ * THEN are lips searched inside the WFLW mouth band of that box and eyes
+ * inside the WFLW eye band. Synchronous, dependency-free; good enough to
+ * align mock patches and to pre-stamp a lock ring, and every suggestion is
+ * still one tap away from correction.
  */
-export function detectFace(canvas: HTMLCanvasElement): FaceLandmarks | null {
+export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox; conf: number } | null): FaceLandmarks | null {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
   const gw = 50, gh = 62;
   const grid = skinGrid(ctx, gw, gh);
   const b = faceBounds(grid, gw, gh);
+  const skinCandidate: FaceBox | null = (b.x1 > b.x0)
+    ? { x: b.x0 / gw, y: b.y0 / gh, w: (b.x1 - b.x0) / gw, h: (b.y1 - b.y0) / gh }
+    : null;
 
-  const fx0 = b.x0 / gw, fx1 = b.x1 / gw, fy0 = b.y0 / gh, fy1 = b.y1 / gh;
-  const fw = fx1 - fx0, fh = fy1 - fy0;
-  const faceBox: FaceBox = { x: fx0, y: fy0, w: fw, h: fh };
+  const decision = decideFaceBox(modelBox ?? null, skinCandidate);
+  const faceBox = decision.faceBox;
+  const fx0 = faceBox.x, fy0 = faceBox.y, fw = faceBox.w, fh = faceBox.h;
   const cx = fx0 + fw / 2;
 
-  // --- eyes: darkest small patches in the upper band ---
-  const eyeBandY0 = fy0 + fh * 0.22, eyeBandY1 = fy0 + fh * 0.5;
+  // --- eyes: darkest small patches in the WFLW eye band of faceBox ---
+  const eye = eyeBand(faceBox);
   let eyeL: [number, number] | null = null, eyeR: [number, number] | null = null;
   {
     const r = 8;
     let bestL = Infinity, bestR = Infinity;
-    for (let gy = Math.floor(eyeBandY0 * 100); gy <= Math.floor(eyeBandY1 * 100); gy += 2) {
-      for (let gx = Math.floor(fx0 * 100 + fw * 100 * 0.08); gx <= Math.floor(fx1 * 100 - fw * 100 * 0.08); gx += 2) {
+    for (let gy = Math.floor(eye.y0 * 100); gy <= Math.floor(eye.y1 * 100); gy += 2) {
+      for (let gx = Math.floor((fx0 + fw * 0.06) * 100); gx <= Math.floor((fx0 + fw * 0.94) * 100); gx += 2) {
         const [rr, gg, bb] = patchMean(ctx, gx / 100, gy / 100, r / 2);
         const lum = 0.299 * rr + 0.587 * gg + 0.114 * bb;
         if (gx / 100 < cx) {
@@ -205,19 +233,23 @@ export function detectFace(canvas: HTMLCanvasElement): FaceLandmarks | null {
       }
     }
   }
-  if (!eyeL || !eyeR) {
-    eyeL = [cx - fw * 0.19, fy0 + fh * 0.38];
-    eyeR = [cx + fw * 0.19, fy0 + fh * 0.38];
-  }
+  // Fallback centers inside the same WFLW eye band (never below it).
+  const eyeMidY = fy0 + fh * EYE_FALLBACK_Y;
+  if (!eyeL) eyeL = [cx - fw * 0.19, eyeMidY];
+  if (!eyeR) eyeR = [cx + fw * 0.19, eyeMidY];
   const eyeR2 = Math.max(fw * 0.055, 0.035);
 
-  // --- lips: redness peak in the lower band ---
-  let lip: [number, number] = [cx, fy0 + fh * 0.78];
+  // --- lips: redness peak inside the WFLW mouth band of faceBox ---
+  const mouth = mouthBand(faceBox);
+  let lip: [number, number] = [
+    fx0 + fw * 0.5,
+    fy0 + fh * MOUTH_FALLBACK_Y,
+  ];
   {
     let bestScore = -Infinity;
-    const y0 = Math.floor((fy0 + fh * 0.62) * 100), y1 = Math.min(98, Math.floor((fy0 + fh * 0.95) * 100));
+    const y0 = Math.max(1, Math.floor(mouth.y0 * 100)), y1 = Math.min(98, Math.floor(mouth.y1 * 100));
     for (let gy = y0; gy <= y1; gy += 2) {
-      for (let gx = Math.floor(fx0 * 100 + fw * 100 * 0.2); gx <= Math.floor(fx1 * 100 - fw * 100 * 0.2); gx += 2) {
+      for (let gx = Math.floor(mouth.x0 * 100); gx <= Math.floor(mouth.x1 * 100); gx += 2) {
         const [r, g, bb] = patchMean(ctx, gx / 100, gy / 100, 3);
         const score = (r - Math.max(g, bb)) - Math.abs(g - bb) * 0.25;
         if (score > bestScore) { bestScore = score; lip = [gx / 100, gy / 100]; }
@@ -226,17 +258,27 @@ export function detectFace(canvas: HTMLCanvasElement): FaceLandmarks | null {
   }
 
   const lipR = { rx: fw * 0.11, ry: Math.max(fh * 0.035, 0.02) };
+  const browY = fy0 + fh * BROW_MID_Y;
 
   return {
     faceBox,
     lip: polyFromBox(lip[0], lip[1], lipR.rx, lipR.ry, 10),
     eyeL: polyFromBox(eyeL[0], eyeL[1], eyeR2, eyeR2 * 0.62, 8),
     eyeR: polyFromBox(eyeR[0], eyeR[1], eyeR2, eyeR2 * 0.62, 8),
-    browL: polyFromBox(eyeL[0], eyeL[1] - fh * 0.075, eyeR2 * 1.15, eyeR2 * 0.32, 8),
-    browR: polyFromBox(eyeR[0], eyeR[1] - fh * 0.075, eyeR2 * 1.15, eyeR2 * 0.32, 8),
+    browL: polyFromBox(eyeL[0], (eyeL[1] + browY) / 2, eyeR2 * 1.15, eyeR2 * 0.32, 8),
+    browR: polyFromBox(eyeR[0], (eyeR[1] + browY) / 2, eyeR2 * 1.15, eyeR2 * 0.32, 8),
     cheekL: polyFromBox(eyeL[0] - fw * 0.13, eyeL[1] + fh * 0.18, fw * 0.085, fh * 0.06, 10),
     cheekR: polyFromBox(eyeR[0] + fw * 0.13, eyeR[1] + fh * 0.18, fw * 0.085, fh * 0.06, 10),
   };
+}
+
+/**
+ * Async model path: ONNX faceBox when available, heuristic otherwise.
+ * Same output shape as detectFace; never rejects (model errors fall back).
+ */
+export async function detectFaceWithModel(canvas: HTMLCanvasElement): Promise<FaceLandmarks | null> {
+  const model = await detectFaceFrameModel(canvas).catch(() => null);
+  return detectFace(canvas, model);
 }
 
 /**
