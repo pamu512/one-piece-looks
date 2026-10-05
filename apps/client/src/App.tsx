@@ -1,40 +1,104 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  ApiError, CATEGORIES, EVENTS, MOODS, api, colorDistance, setLockAccent,
-  type Category, type Event, type FaceResult, type Look, type LooksResult, type Mood, type SessionInfo, type SkinType, type Tone,
+  ApiError, EVENTS, MOODS, TONE_DEPTHS, api, hexToRgb, setLockAccent,
+  type Category, type Event, type FaceResult, type Look, type LooksResult,
+  type Mood, type SessionInfo, type Tone,
 } from "./lib/types";
 import {
-  CalmError, FACE_GUIDE, GuideOverlay, PHASE_COPY, PRODUCT_GUIDE, PhaseLine,
-  TapSampleStage, faceGate, useCamera,
+  CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, looksLikeSkin, useCamera,
+  type SampleCanvasHandle, type SamplePoint,
 } from "./components/capture";
 
-type Step = 0 | 1 | 2 | 3 | 4 | 5; // start..looks
+/* =================================================================
+ * One Piece Looks. Three beats, one persistent face photo.
+ *
+ * Beat 1  camera stage: front camera, face guide, one shutter (file
+ *         picker stays as a small fallback). The still goes full
+ *         screen with five zone targets; one tap sets the category
+ *         and samples the on-face hex (the lock).
+ * Beat 2  lock stamp + build: ring in the lock hex on the tap point,
+ *         one pan-shift sentence, optional pan photo, tone fallback
+ *         inline with defaults, mood + event tray, Build button.
+ * Beat 3  the three looks are the app: horizontal snap of Anchor,
+ *         Lift, Statement renders, shuffle primary, chip tray with
+ *         explicit Rebuild, privacy line. No shop catalog.
+ * ================================================================= */
+
+type Stage = "camera" | "photo" | "looks";
+
+const ZONE_TARGETS: { id: Category; label: string; x: number; y: number }[] = [
+  { id: "lip", label: "Lip", x: 50, y: 71 },
+  { id: "cheek", label: "Cheek", x: 30, y: 56 },
+  { id: "eye", label: "Eye", x: 38, y: 47 },
+  { id: "brow", label: "Brow", x: 38, y: 39.5 },
+  { id: "liner", label: "Liner", x: 62, y: 45.5 },
+];
+
+const ZONE_WORD: Record<Category, string> = {
+  lip: "lip", cheek: "cheek", eye: "eye", brow: "brow", liner: "liner",
+};
+
+const NEAR_IDENTICAL = 42;
 
 interface LockInfo {
   category: Category;
-  productHex: string;
   onFaceHex: string;
+  productHex: string | null;
   unverified: boolean;
+  point: SamplePoint;
 }
 
-const NEAR_IDENTICAL = 42; // color distance under which we say "true to the pan"
+function nearestZone(xPct: number, yPct: number): Category {
+  let best: Category = "lip";
+  let bestD = Infinity;
+  for (const z of ZONE_TARGETS) {
+    // aspect-weighted distance (stage is 3:4, so x% covers less px than y%)
+    const d = (0.75 * (z.x - xPct)) ** 2 + (z.y - yPct) ** 2;
+    if (d < bestD) { bestD = d; best = z.id; }
+  }
+  return best;
+}
+
+function panShiftSentence(onFace: string, pan: string | null): string {
+  if (!pan || pan.toLowerCase() === onFace.toLowerCase())
+    return "We're building from the color exactly as it sits on your face.";
+  const a = hexToRgb(onFace), b = hexToRgb(pan);
+  const la = 0.2126 * a.r + 0.7152 * a.g + 0.0722 * a.b;
+  const lb = 0.2126 * b.r + 0.7152 * b.g + 0.0722 * b.b;
+  const db = b.b - a.b, dl = lb - la;
+  let panWord = "a touch different", faceWord = "its own thing on you";
+  if (Math.abs(db) >= Math.abs(dl) && Math.abs(db) > 6) {
+    panWord = db > 0 ? "cooler" : "warmer";
+    faceWord = db > 0 ? "warmer" : "cooler";
+  } else if (Math.abs(dl) > 6) {
+    panWord = dl > 0 ? "lighter" : "deeper";
+    faceWord = dl > 0 ? "deeper" : "lighter";
+  }
+  return `The pan reads ${panWord}; on you it reads ${faceWord}. We build from what's on your face.`;
+}
 
 export default function App() {
-  const [step, setStep] = useState<Step>(0);
-  const [category, setCategory] = useState<Category | null>(null);
+  const [stage, setStage] = useState<Stage>("camera");
+  const [photo, setPhoto] = useState<string | null>(null);
 
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [face, setFace] = useState<FaceResult | null>(null);
   const [tone, setTone] = useState<Tone | null>(null);
   const [lock, setLock] = useState<LockInfo | null>(null);
 
-  const [mood, setMood] = useState<Mood | null>(null);
-  const [event, setEvent] = useState<Event | null>(null);
+  const [mood, setMood] = useState<Mood>("Soft");
+  const [event, setEvent] = useState<Event>("Casual");
   const [looks, setLooks] = useState<LooksResult | null>(null);
-  const [looksLoading, setLooksLoading] = useState(false);
+  const [builtPair, setBuiltPair] = useState<{ mood: Mood; event: Event } | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const [error, setError] = useState<{ msg: string; retry?: () => void } | null>(null);
-  const [phase, setPhase] = useState<keyof typeof PHASE_COPY | null>(null);
+  const [phase, setPhase] = useState<"skin" | "building" | null>(null);
+
+  const faceInFlight = useRef(false);
+  const [faceAttempt, setFaceAttempt] = useState(0);
+  const stageRef = useRef<Stage>("camera");
+  useEffect(() => { stageRef.current = stage; }, [stage]);
 
   useEffect(() => { if (lock) setLockAccent(lock.onFaceHex); }, [lock]);
 
@@ -42,652 +106,625 @@ export default function App() {
     if (!session) api.createSession().then(setSession).catch(() => undefined);
   }, [session]);
 
+  // Beat 2 entry: POST /face the moment a lock exists (idempotent on same photo).
+  // Beat 2 entry: POST /face the moment a lock exists (idempotent on the
+  // same photo server-side; retry bumps an attempt counter).
+  useEffect(() => {
+    if (!lock || !session || face || faceInFlight.current) return;
+    faceInFlight.current = true;
+    setPhase("skin");
+    api.postFace(session.sessionId, photo!.split(",")[1] ?? "", {
+      category: lock.category,
+      onFaceHex: lock.onFaceHex,
+      productHex: lock.productHex ?? lock.onFaceHex,
+      unverified: lock.unverified,
+    })
+      .then((res) => { setFace(res); setPhase(null); })
+      .catch((e) => {
+        setPhase(null);
+        const msg = e instanceof ApiError ? e.message : "Something interrupted the analysis.";
+        setError({
+          msg,
+          retry: () => { setError(null); setFaceAttempt((n) => n + 1); },
+        });
+      })
+      .finally(() => { faceInFlight.current = false; });
+  }, [lock, session, face, photo, faceAttempt]);
+
   const restart = () => {
-    setStep(0); setCategory(null); setFace(null); setTone(null); setLock(null);
-    setMood(null); setEvent(null); setLooks(null); setError(null); setPhase(null);
+    setStage("camera"); setPhoto(null); setFace(null); setTone(null); setLock(null);
+    setMood("Soft"); setEvent("Casual"); setLooks(null); setBuiltPair(null);
+    setError(null); setPhase(null); setBusy(false);
     setSession(null);
     api.createSession().then(setSession).catch(() => undefined);
   };
 
+  async function sendTone(depth: string, temperature: "warm" | "neutral" | "cool") {
+    if (!session || !face) return;
+    const res = await api.postTone(session.sessionId, depth, temperature);
+    setTone(res.tone);
+  }
+
+  async function buildLooks(m: Mood, e: Event, toneChoice?: { depth: string; temperature: "warm" | "neutral" | "cool" }) {
+    if (!session || busy) return;
+    setBusy(true); setError(null);
+    try {
+      if (toneChoice) await sendTone(toneChoice.depth, toneChoice.temperature);
+      setStage("looks"); setPhase("building");
+      const res = await api.postLooks(session.sessionId, m, e);
+      setLooks(res); setBuiltPair({ mood: m, event: e });
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : "The looks didn't build.";
+      setError({ msg, retry: () => { setError(null); void buildLooks(m, e, toneChoice); } });
+    } finally { setBusy(false); setPhase(null); }
+  }
+
+  async function shuffle() {
+    if (!session || busy) return;
+    setBusy(true); setError(null);
+    try {
+      const res = await api.postShuffle(session.sessionId);
+      setLooks(res);
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : "Shuffle didn't land.";
+      setError({ msg, retry: () => { setError(null); void shuffle(); } });
+    } finally { setBusy(false); }
+  }
+
+  const pairDirty = builtPair !== null && (builtPair.mood !== mood || builtPair.event !== event);
+
   return (
     <div className="shell">
-      <div className="steps" aria-hidden>
-        {[0, 1, 2, 3, 4, 5].map((i) => (
-          <i key={i} className={step === i ? "on" : ""} />
-        ))}
-      </div>
-
       {error && (
         <div style={{ marginTop: 18 }}>
           <CalmError msg={error.msg} onRetry={error.retry} onBack={() => setError(null)} />
         </div>
       )}
 
-      <main className="grow" style={{ display: "flex", flexDirection: "column", justifyContent: "center", padding: "18px 0" }}>
-        {step === 0 && (
-          <StartScreen onPick={(c) => { setCategory(c); setStep(1); }} />
-        )}
-        {step === 1 && category && (
-          <ProductCapture
-            category={category}
-            onDone={(hex) => { setLock({ category, productHex: hex, onFaceHex: "", unverified: false }); setStep(2); }}
-            onBack={() => setStep(0)}
+      <main className="grow" style={{ display: "flex", flexDirection: "column", justifyContent: "center", padding: "12px 0" }}>
+        {stage === "camera" && (
+          <CameraStage
+            onPhoto={(p) => { setPhoto(p); setStage("photo"); }}
           />
         )}
-        {step === 2 && category && (
-          <FaceCapture
-            category={category}
-            onDone={(onFaceHex, unverified, skinRef) => {
-              setLock((l) => l ? { ...l, onFaceHex, unverified } : l);
-              void runFace(onFaceHex, unverified, skinRef);
+        {stage === "photo" && photo && (
+          <PhotoStage
+            photo={photo}
+            lock={lock}
+            face={face}
+            tone={tone}
+            onLock={(category, hex, point, unverified) =>
+              setLock({ category, onFaceHex: hex, productHex: null, unverified, point })}
+            onUpdateProduct={(hex) =>
+              setLock((l) => (l ? { ...l, productHex: hex } : l))}
+            onRetake={() => {
+              // New photo = new face: drop the lock and analysis (the
+              // session stays; POST /face on a new photo re-runs analysis).
+              setPhoto(null); setLock(null); setFace(null); setTone(null);
+              setStage("camera");
             }}
-            onBack={() => setStep(1)}
-            existing={lock}
+            mood={mood} event={event} onMood={setMood} onEvent={setEvent}
+            onBuild={(toneChoice) => void buildLooks(mood, event, toneChoice)}
+            busy={busy}
           />
         )}
-        {step === 3 && lock && face && (
-          <ShiftScreen
-            lock={lock} face={face} tone={tone}
-            onTonePicked={(t) => setTone(t)}
-            onNext={() => setStep(4)}
-          />
-        )}
-        {step === 4 && (
-          <MoodEventScreen
-            mood={mood} event={event}
-            onMood={setMood} onEvent={setEvent}
-            onBuild={() => void buildLooks()}
-            loading={looksLoading}
-          />
-        )}
-        {step === 5 && looks && lock && (
-          <LooksScreen
-            looks={looks} lockHex={lock.onFaceHex} category={lock.category}
+        {stage === "looks" && lock && (
+          <LooksStage
+            photo={photo}
+            looks={looks}
+            lock={lock}
+            mood={mood} event={event} onMood={setMood} onEvent={setEvent}
+            pairDirty={pairDirty}
+            onRebuild={() => {
+              if (face?.toneFallback && !tone) {
+                void buildLooks(mood, event, { depth: "03", temperature: "neutral" });
+              } else {
+                void buildLooks(mood, event);
+              }
+            }}
             onShuffle={() => void shuffle()}
-            onChange={() => { setStep(4); }}
             onRestart={restart}
-            busy={looksLoading}
+            busy={busy}
           />
-        )}
-        {step === 5 && !looks && lock && (
-          <section aria-label="Building your three looks" className="fade-in">
-            <div className="row" style={{ marginBottom: 14 }}>
-              <div className="grow">
-                <p className="eyebrow" style={{ margin: 0 }}>Your three looks</p>
-                <h2 className="display" style={{ fontSize: 30, margin: 0 }}>Built around your {lock.category}</h2>
-              </div>
-              <span className="lock-chip"><span className="dot" style={{ background: lock.onFaceHex }} />{lock.onFaceHex}</span>
-            </div>
-            <div style={{ display: "grid", gap: 16 }}>
-              {(["anchor", "lift", "statement"] as const).map((role) => (
-                <article key={role} className="look-card" aria-hidden>
-                  <div className="img-wrap">
-                    <div className="skel" style={{ position: "absolute", inset: 0 }} />
-                  </div>
-                  <div className="look-head">
-                    <h3 className="display" style={{ fontSize: 22, margin: 0 }}>{role === "anchor" ? "Anchor" : role === "lift" ? "Lift" : "Statement"}</h3>
-                    <span className="recipe-chip"><span className="dot" style={{ background: lock.onFaceHex }} />locked</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
         )}
       </main>
 
       <PhaseLine phase={phase} />
     </div>
   );
-
-  async function runFace(onFaceHex: string, unverified: boolean, _skinRef: string | null) {
-    if (!session || !category) return;
-    const photo = sessionStorage.getItem("opl:facePhoto") ?? "";
-    const productHex = sessionStorage.getItem("opl:productHex") ?? onFaceHex;
-    setPhase("skin");
-    try {
-      const res = await api.postFace(session.sessionId, photo.split(",")[1] ?? "", {
-        category, onFaceHex, productHex, unverified,
-      });
-      setFace(res);
-      setLock({ category, productHex, onFaceHex, unverified });
-      setPhase(null);
-      setStep(3);
-    } catch (e) {
-      setPhase(null);
-      const msg = e instanceof ApiError ? e.message : "Something interrupted the analysis.";
-      setError({ msg, retry: () => { setError(null); void runFace(onFaceHex, unverified, _skinRef); } });
-      // still allow moving to Shift with unverified data if retry keeps failing? No — calm card only.
-    }
-  }
-
-  async function buildLooks() {
-    if (!session || !mood || !event) return;
-    setLooksLoading(true);
-    setPhase("building");
-    setStep(5);
-    try {
-      const res = await api.postLooks(session.sessionId, mood, event);
-      setLooks(res);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "The looks didn’t build.";
-      setError({ msg, retry: () => { setError(null); void buildLooks(); } });
-    } finally {
-      setLooksLoading(false);
-      setPhase(null);
-    }
-  }
-
-  async function shuffle() {
-    if (!session) return;
-    setLooksLoading(true);
-    try {
-      const res = await api.postShuffle(session.sessionId);
-      setLooks(res);
-    } catch (e) {
-      const msg = e instanceof ApiError ? e.message : "Shuffle didn’t land.";
-      setError({ msg, retry: () => { setError(null); void shuffle(); } });
-    } finally { setLooksLoading(false); }
-  }
 }
 
-/* ================= screen 1: start ================= */
+/* ================= beat 1: camera stage ================= */
 
-function StartScreen({ onPick }: { onPick: (c: Category) => void }) {
-  return (
-    <section className="fade-in" aria-label="Choose your piece">
-      <p className="eyebrow">One Piece Looks</p>
-      <h1 className="display" style={{ fontSize: 44 }}>One piece.<br />Three looks.</h1>
-      <p className="muted" style={{ marginTop: 12, marginBottom: 26, maxWidth: "38ch" }}>
-        Start with the one product you’re wearing. We read how it sits on you, then build three finished looks around it.
-      </p>
-      <div role="list" style={{ display: "grid", gap: 10 }}>
-        {CATEGORIES.map((c) => (
-          <button
-            key={c.id}
-            role="listitem"
-            className="btn btn-ghost"
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: 16, padding: "16px 18px" }}
-            onClick={() => onPick(c.id)}
-          >
-            <span style={{ textAlign: "left" }}>
-              <span style={{ display: "block", fontWeight: 650 }}>{c.label}</span>
-              <span className="dim" style={{ fontSize: 13 }}>{c.blurb}</span>
-            </span>
-            <span aria-hidden style={{ color: "var(--ink-3)" }}>→</span>
-          </button>
-        ))}
-      </div>
-      <p className="footer-note">Photos go to the YouCam service for analysis. We don’t keep them.</p>
-    </section>
-  );
-}
-
-/* ================= screen 2: product capture ================= */
-
-function ProductCapture({
-  category, onDone, onBack,
-}: { category: Category; onDone: (hex: string) => void; onBack: () => void }) {
+function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string) => void }) {
   const cam = useCamera();
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [hex, setHex] = useState<string | null>(null);
-  const [mark, setMark] = useState<{ x: number; y: number } | null>(null);
-  const guide = PRODUCT_GUIDE[category];
 
   useEffect(() => { void cam.start(); return () => cam.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const onFile = (f: File | undefined) => {
     if (!f) return;
     const r = new FileReader();
-    r.onload = () => setPhoto(String(r.result));
+    r.onload = () => onPhoto(String(r.result));
     r.readAsDataURL(f);
   };
 
   return (
-    <section className="fade-in" aria-label="Photograph the product">
-      <div className="row" style={{ marginBottom: 14 }}>
-        <button className="btn btn-ghost" onClick={onBack} aria-label="Back to categories">←</button>
-        <div>
-          <p className="eyebrow" style={{ margin: 0 }}>Step 1 of 3 · {category}</p>
-          <h2 className="display" style={{ fontSize: 28, margin: 0 }}>The piece itself</h2>
-        </div>
-      </div>
+    <section className="fade-in" aria-label="Take your photo">
+      <p className="eyebrow" style={{ textAlign: "center", marginBottom: 10 }}>One Piece Looks</p>
+      <h1 className="display" style={{ fontSize: 34, textAlign: "center", marginBottom: 14 }}>
+        One piece. Three looks.
+      </h1>
 
-      {!photo && (
-        <>
-          <div className="camera-stage">
-            <video ref={cam.videoRef} playsInline muted aria-label="Camera preview for product photo" />
-            <GuideOverlay kind={guide.shape} />
-            {cam.state === "denied" && (
-              <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(0,0,0,.72)", padding: 22, textAlign: "center" }}>
-                <div>
-                  <p style={{ margin: "0 0 12px" }}>Camera unavailable</p>
-                  <label className="btn btn-primary" style={{ display: "inline-block" }}>
-                    Choose a photo
-                    <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
-                  </label>
-                </div>
-              </div>
-            )}
-          </div>
-          <ul className="muted" style={{ margin: "16px 0 18px", paddingLeft: 20, fontSize: 14.5 }}>
-            {guide.lines.map((l: string) => <li key={l} style={{ marginBottom: 4 }}>{l}</li>)}
-          </ul>
-          <div className="row">
-            <button className="btn btn-primary btn-wide" disabled={cam.state !== "live"} onClick={() => setPhoto(cam.grab())}>
-              Capture
-            </button>
-          </div>
-        </>
-      )}
-
-      {photo && !hex && (
-        <>
-          <TapSampleStage
-            photoDataUrl={photo}
-            zoneHint="Tap the color — the heart of it, not the edge"
-            sampleMark={mark}
-            onSample={(h: string, _ctx: CanvasRenderingContext2D, pt: { x: number; y: number }) => { setHex(h); setMark(pt); }}
-          />
-          <div className="row" style={{ marginTop: 16 }}>
-            <button className="btn btn-ghost" onClick={() => { setPhoto(null); setMark(null); void cam.start(); }}>Retake</button>
-            <span className="grow" />
-            <label className="btn btn-ghost" style={{ cursor: "pointer" }}>
-              Use a file
-              <input type="file" accept="image/*" hidden onChange={(e) => { setHex(null); onFile(e.target.files?.[0]); }} />
-            </label>
-          </div>
-        </>
-      )}
-
-      {photo && hex && (
-        <div className="fade-in">
-          <div className="card row" style={{ gap: 16 }}>
-            <span style={{ width: 64, height: 64, borderRadius: 14, background: hex, border: "1px solid var(--line-strong)", flexShrink: 0 }} />
-            <div className="grow">
-              <p style={{ margin: 0, fontWeight: 650 }}>This is your piece?</p>
-              <p className="dim" style={{ margin: "2px 0 0", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{hex}</p>
+      <div className="camera-stage">
+        <video ref={cam.videoRef} playsInline muted aria-label="Front camera preview" />
+        <FaceGuideOverlay />
+        {cam.state === "denied" && (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(0,0,0,.72)", padding: 22, textAlign: "center" }}>
+            <div>
+              <p style={{ margin: "0 0 12px" }}>Camera unavailable</p>
+              <label className="btn btn-primary" style={{ display: "inline-block" }}>
+                Choose a photo
+                <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+              </label>
             </div>
           </div>
-          <div className="row" style={{ marginTop: 16 }}>
-            <button className="btn btn-ghost" onClick={() => setHex(null)}>Re-tap</button>
-            <span className="grow" />
-            <button
-              className="btn btn-primary"
-              onClick={() => {
-                sessionStorage.setItem("opl:productHex", hex);
-                sessionStorage.setItem("opl:productPhoto", photo);
-                onDone(hex);
-              }}
-            >
-              Looks right
-            </button>
-          </div>
-        </div>
-      )}
-    </section>
-  );
-}
-
-/* ================= screen 3: face capture ================= */
-
-function FaceCapture({
-  category, onDone, onBack, existing,
-}: {
-  category: Category;
-  onDone: (onFaceHex: string, unverified: boolean, skinRefHex: string | null) => void;
-  onBack: () => void;
-  existing: LockInfo | null;
-}) {
-  const cam = useCamera();
-  const [photo, setPhoto] = useState<string | null>(null);
-  const [hex, setHex] = useState<string | null>(null);
-  const [mark, setMark] = useState<{ x: number; y: number } | null>(null);
-  const [skinRef, setSkinRef] = useState<string | null>(null);
-  const [nudges, setNudges] = useState(0);
-  const [gate, setGate] = useState<{ reason: string; fix: string } | null>(null);
-  const guide = FACE_GUIDE[category];
-
-  useEffect(() => { void cam.start(); return () => cam.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const onFile = (f: File | undefined) => {
-    if (!f) return;
-    const r = new FileReader();
-    r.onload = () => setPhoto(String(r.result));
-    r.readAsDataURL(f);
-  };
-
-  // first tap = worn-zone sample; second tap (optional) = clean skin reference for the gate
-  function handleSample(h: string, _ctx: CanvasRenderingContext2D, pt: { x: number; y: number }) {
-    if (!hex) { setHex(h); setMark(pt); setGate(null); return; }
-    setSkinRef(h);
-    const g = faceGate(category, hex, h);
-    setGate(g);
-  }
-
-  const nudged = gate && nudges < 3;
-
-  return (
-    <section className="fade-in" aria-label="Wear it, then shoot">
-      <div className="row" style={{ marginBottom: 14 }}>
-        <button className="btn btn-ghost" onClick={onBack} aria-label="Back to product photo">←</button>
-        <div>
-          <p className="eyebrow" style={{ margin: 0 }}>Step 2 of 3 · {category}</p>
-          <h2 className="display" style={{ fontSize: 28, margin: 0 }}>Wear it, then shoot</h2>
-        </div>
-      </div>
-
-      {!photo && (
-        <>
-          <div className="camera-stage">
-            <video ref={cam.videoRef} playsInline muted aria-label="Camera preview for face photo" />
-            <GuideOverlay kind="face" />
-            {cam.state === "denied" && (
-              <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(0,0,0,.72)", padding: 22, textAlign: "center" }}>
-                <div>
-                  <p style={{ margin: "0 0 12px" }}>Camera unavailable</p>
-                  <label className="btn btn-primary" style={{ display: "inline-block" }}>
-                    Choose a photo
-                    <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
-                  </label>
-                </div>
-              </div>
-            )}
-          </div>
-          <ul className="muted" style={{ margin: "16px 0 18px", paddingLeft: 20, fontSize: 14.5 }}>
-            {guide.lines.map((l: string) => <li key={l} style={{ marginBottom: 4 }}>{l}</li>)}
-          </ul>
-          <button className="btn btn-primary btn-wide" disabled={cam.state !== "live"} onClick={() => setPhoto(cam.grab())}>
-            Capture
-          </button>
-        </>
-      )}
-
-      {photo && !hex && (
-        <>
-          <TapSampleStage
-            photoDataUrl={photo}
-            zoneHint={guide.zone}
-            sampleMark={mark}
-            onSample={handleSample}
-          />
-          <p className="muted" style={{ fontSize: 14, marginTop: 12, marginBottom: 0, textAlign: "center" }}>
-            Tap where you wore it. We’ll read the color from there.
+        )}
+        {cam.state === "live" && (
+          <p className="stage-hint" aria-hidden>
+            Wear your one piece. Center your face, then shoot.
           </p>
-        </>
-      )}
+        )}
+      </div>
 
-      {photo && hex && (
-        <div className="fade-in">
-          <div className="card">
-            <div className="row" style={{ gap: 14 }}>
-              <span style={{ width: 56, height: 56, borderRadius: 12, background: hex, border: "1px solid var(--line-strong)", flexShrink: 0 }} />
-              <div className="grow">
-                <p style={{ margin: 0, fontWeight: 650 }}>On your face</p>
-                <p className="dim" style={{ margin: "2px 0 0", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12.5 }}>{hex}</p>
-              </div>
-            </div>
-            {!skinRef && (
-              <p className="muted" style={{ fontSize: 13.5, margin: "12px 0 0" }}>
-                One more tap: on plain skin beside it (cheek or jaw). It calibrates the read — two taps total.
-              </p>
-            )}
-          </div>
+      <div className="row" style={{ marginTop: 14 }}>
+        <button
+          className="btn btn-primary btn-wide"
+          disabled={cam.state !== "live"}
+          onClick={() => { const p = cam.grab(); if (p) onPhoto(p); }}
+        >
+          Take the photo
+        </button>
+      </div>
+      <div style={{ textAlign: "center", marginTop: 10 }}>
+        <label className="mini-link" style={{ cursor: "pointer" }}>
+          No camera? Choose a photo
+          <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+        </label>
+      </div>
 
-          {nudged && gate && (
-            <div className="calm-card" style={{ marginTop: 12 }} role="status">
-              <p style={{ margin: "0 0 2px", fontWeight: 600 }}>{gate.reason}</p>
-              <p className="muted" style={{ margin: 0, fontSize: 14 }}>If you can, {gate.fix}.</p>
-            </div>
-          )}
-
-          <div className="row" style={{ marginTop: 16, flexWrap: "wrap" }}>
-            {gate && nudges < 3 && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => { setNudges((n) => n + 1); setHex(null); setMark(null); setSkinRef(null); setGate(null); }}
-              >
-                Retake ({3 - nudges} left)
-              </button>
-            )}
-            {gate && nudges >= 3 && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => onDone(hex, true, skinRef)}
-              >
-                Continue anyway
-              </button>
-            )}
-            {!gate && (
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  sessionStorage.setItem("opl:facePhoto", photo);
-                  onDone(hex, existing?.unverified ?? false, skinRef);
-                }}
-              >
-                Looks right
-              </button>
-            )}
-            <span className="grow" />
-            <button className="btn btn-ghost" onClick={() => { setHex(null); setMark(null); setSkinRef(null); setGate(null); }}>
-              Re-tap
-            </button>
-          </div>
-          {gate && nudges >= 3 && (
-            <p className="dim" style={{ fontSize: 12.5, marginTop: 10, marginBottom: 0 }}>
-              Continuing marks the sample unverified — that’s fine, we’ll still build from it.
-            </p>
-          )}
-        </div>
-      )}
+      <p className="footer-note">Photos go to the YouCam service for analysis. We don't keep them.</p>
     </section>
   );
 }
 
-/* ================= screen 4: the shift ================= */
+/* ================= beats 1+2: the persistent photo stage ================= */
 
-function ShiftScreen({
-  lock, face, tone, onTonePicked, onNext,
+function PhotoStage({
+  photo, lock, face, tone, onLock, onUpdateProduct, onRetake,
+  mood, event, onMood, onEvent, onBuild, busy,
 }: {
-  lock: LockInfo; face: FaceResult; tone: Tone | null;
-  onTonePicked: (t: Tone) => void; onNext: () => void;
+  photo: string;
+  lock: LockInfo | null;
+  face: FaceResult | null;
+  tone: Tone | null;
+  onLock: (category: Category, hex: string, point: SamplePoint, unverified: boolean) => void;
+  onUpdateProduct: (hex: string) => void;
+  onRetake: () => void;
+  mood: Mood; event: Event;
+  onMood: (m: Mood) => void; onEvent: (e: Event) => void;
+  onBuild: (toneChoice?: { depth: string; temperature: "warm" | "neutral" | "cool" }) => void;
+  busy: boolean;
 }) {
-  const [depth, setDepth] = useState<string | null>(null);
-  const [temp, setTemp] = useState<"warm" | "neutral" | "cool" | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const canvasApi = useRef<SampleCanvasHandle | null>(null);
+  const [gate, setGate] = useState<{ hex: string; point: SamplePoint } | null>(null);
+  const [showHex, setShowHex] = useState(false);
+  const [pan, setPan] = useState<null | "shoot" | "sample">(null);
+  const [panPhoto, setPanPhoto] = useState<string | null>(null);
+  const [depth, setDepth] = useState("03");
+  const [temp, setTemp] = useState<"warm" | "neutral" | "cool">("neutral");
 
-  const dist = useMemo(() => colorDistance(lock.productHex, lock.onFaceHex), [lock]);
-  const nearIdentical = dist < NEAR_IDENTICAL;
-  const facts: string[] = [`skin type: ${face.skinType}`];
-  if (tone) facts.push(tone.source === "picker" ? "tone: picked by you" : "tone: read");
+  const sampling = !lock;
 
-  async function saveTone(d: string, t: "warm" | "neutral" | "cool") {
-    const sessionId = face.sessionId;
-    setSaving(true); setErr(null);
-    try {
-      const res = await api.postTone(sessionId, d, t);
-      onTonePicked({ source: "picker", depth: d, temperature: t });
-    } catch {
-      setErr("Couldn’t save that. Try once more.");
-    } finally { setSaving(false); }
+  function handleSample(hex: string, pt: SamplePoint) {
+    if (lock) return;
+    if (looksLikeSkin(hex)) {
+      setGate({ hex, point: pt });
+      return;
+    }
+    setGate(null);
+    onLock(nearestZone(pt.xPct, pt.yPct), hex, pt, false);
   }
 
+  function handleZoneTap(z: (typeof ZONE_TARGETS)[number]) {
+    if (lock) return;
+    // Sample at the canonical zone point on the photo.
+    canvasApi.current?.sampleAt(z.x / 100, z.y / 100);
+  }
+
+  /* ---------- beat 1: sampling view ---------- */
+
+  if (sampling) {
+    return (
+      <section className="fade-in" aria-label="Tap where you wore it">
+        <div className="stage-head">
+          <button className="mini-link" onClick={onRetake} aria-label="Retake the photo">Retake</button>
+          <p className="eyebrow" style={{ margin: 0 }}>Step 1 of 2</p>
+        </div>
+
+        <SampleCanvas ref={canvasApi} src={photo} ariaLabel="Your photo. Tap where you are wearing the piece." onSample={handleSample}>
+          {ZONE_TARGETS.map((z) => (
+            <button
+              key={z.id}
+              type="button"
+              className="zone-dot"
+              style={{ left: `${z.x}%`, top: `${z.y}%` }}
+              onClick={(e) => { e.stopPropagation(); handleZoneTap(z); }}
+              aria-label={`${z.label} zone. Samples the color at the ${z.label.toLowerCase()}.`}
+            >
+              <span className="zone-dot-ring" />
+              <span className="zone-dot-label">{z.label}</span>
+            </button>
+          ))}
+          <p className="stage-hint" aria-hidden>Tap where you're wearing it. One tap reads the color and locks it.</p>
+          {gate && (
+            <div className="gate-line" role="status">
+              <p>
+                That tap reads like skin, not product color. Tap again right on the color,
+                or continue and we'll mark it unverified.
+              </p>
+              <button
+                className="mini-btn"
+                onClick={() => { onLock(nearestZone(gate.point.xPct, gate.point.yPct), gate.hex, gate.point, true); setGate(null); }}
+              >
+                Continue with this color
+              </button>
+            </div>
+          )}
+        </SampleCanvas>
+      </section>
+    );
+  }
+
+  /* ---------- pan sub-capture (same stage) ---------- */
+
+  if (pan === "shoot") {
+    return (
+      <PanCapture
+        onShot={(p) => { setPanPhoto(p); setPan("sample"); }}
+        onCancel={() => setPan(null)}
+      />
+    );
+  }
+  if (pan === "sample" && panPhoto) {
+    return (
+      <section className="fade-in" aria-label="Sample the pan color">
+        <div className="stage-head">
+          <button className="mini-link" onClick={() => setPan(null)}>Cancel</button>
+          <p className="eyebrow" style={{ margin: 0 }}>The pan</p>
+        </div>
+        <SampleCanvas
+          src={panPhoto}
+          ariaLabel="Pan photo. Tap the heart of the color, not the edge."
+          onSample={(hex) => { onUpdateProduct(hex); setPan(null); }}
+        >
+          <p className="stage-hint" aria-hidden>Tap the heart of the color, not the edge.</p>
+        </SampleCanvas>
+      </section>
+    );
+  }
+
+  /* ---------- beat 2: locked view ---------- */
+
+  const toneNeeded = face?.toneFallback && !tone;
+
   return (
-    <section className="fade-in" aria-label="How it reads on you">
-      <p className="eyebrow">Step 3 of 3 · the read</p>
-      <h2 className="display" style={{ fontSize: 34, marginBottom: 18 }}>
-        {nearIdentical ? "True to the pan on you." : "On you it reads like this."}
-      </h2>
-
-      <div className="swatch-pair">
-        <Swatch label="The piece" hex={lock.productHex} />
-        <Swatch label="On you" hex={lock.onFaceHex} lockMark />
+    <section className="fade-in" aria-label="Your locked color and the build tray">
+      <div className="stage-head">
+        <button className="mini-link" onClick={onRetake} aria-label="Retake the photo">Retake</button>
+        <p className="eyebrow" style={{ margin: 0 }}>Step 2 of 2</p>
       </div>
 
-      <p className="muted" style={{ fontSize: 14.5, marginTop: 12 }}>
-        {nearIdentical
-          ? "We’ll build from what’s on your face."
-          : "Same product, your light. Everything below starts from the on-you shade."}
-      </p>
+      <SampleCanvas src={photo} ariaLabel="Your photo with the locked color" onSample={() => undefined} disabled>
+        <LockRing
+          point={lock.point} hex={lock.onFaceHex} category={lock.category}
+          reveal={showHex} onToggle={() => setShowHex((v) => !v)}
+        />
+        {lock.unverified && <span className="unverified-tag">unverified sample</span>}
+      </SampleCanvas>
 
-      <div className="row" style={{ marginTop: 16, flexWrap: "wrap", gap: 8 }}>
-        <span className="lock-chip"><span className="dot" />{lock.category} locked</span>
-        {lock.unverified && <span className="recipe-chip">unverified sample</span>}
-      </div>
+      <p className="pan-shift" role="note">{panShiftSentence(lock.onFaceHex, lock.productHex)}</p>
 
-      <p className="dim" style={{ fontSize: 13, marginTop: 14 }}>{facts.join("  ·  ")}</p>
+      {!lock.productHex ? (
+        <div className="row" style={{ marginTop: 10, flexWrap: "wrap", gap: 8 }}>
+          <button className="mini-btn" onClick={() => setPan("shoot")}>Photograph the pan</button>
+          <button className="mini-btn" onClick={() => onUpdateProduct(lock.onFaceHex)}>
+            Skip, use what is on my face
+          </button>
+        </div>
+      ) : (
+        <div className="row" style={{ marginTop: 10, gap: 8 }}>
+          <span className="recipe-chip"><span className="dot" style={{ background: lock.productHex }} />pan color set</span>
+          <button className="mini-link" onClick={() => setPan("shoot")}>Re-shoot the pan</button>
+        </div>
+      )}
 
-      {face.toneFallback && !tone && (
-        <div className="card" style={{ marginTop: 18 }}>
-          <p style={{ margin: "0 0 10px", fontWeight: 650 }}>Pick your tone — two taps</p>
+      {toneNeeded && (
+        <div className="card" style={{ marginTop: 14 }}>
+          <p style={{ margin: "0 0 8px", fontWeight: 650, fontSize: 14.5 }}>Your tone (pre-filled, adjust if you like)</p>
           <div className="chip-row" role="group" aria-label="Tone depth">
-            {["01", "02", "03", "04", "05", "06"].map((d) => (
+            {TONE_DEPTHS.map((d) => (
               <button key={d} className="chip" aria-pressed={depth === d} onClick={() => setDepth(d)}>{d}</button>
             ))}
           </div>
-          <div className="chip-row" role="group" aria-label="Tone temperature" style={{ marginTop: 10 }}>
+          <div className="chip-row" role="group" aria-label="Tone temperature" style={{ marginTop: 8 }}>
             {(["warm", "neutral", "cool"] as const).map((t) => (
               <button key={t} className="chip" aria-pressed={temp === t} onClick={() => setTemp(t)}>{t}</button>
             ))}
           </div>
-          {err && <p className="dim" style={{ fontSize: 13, marginBottom: 0 }}>{err}</p>}
-          <button
-            className="btn btn-primary btn-wide"
-            style={{ marginTop: 14 }}
-            disabled={!depth || !temp || saving}
-            onClick={() => depth && temp && void saveTone(depth, temp)}
-          >
-            {saving ? "Saving…" : "Save tone"}
-          </button>
         </div>
       )}
 
-      <div style={{ marginTop: 22 }}>
+      <MoodEventTray mood={mood} event={event} onMood={onMood} onEvent={onEvent} />
+
+      <div className="row" style={{ marginTop: 16 }}>
         <button
           className="btn btn-primary btn-wide"
-          onClick={onNext}
-          disabled={face.toneFallback && !tone}
+          disabled={!face || busy}
+          onClick={() => onBuild(toneNeeded ? { depth, temperature: temp } : undefined)}
         >
-          Choose the mood
+          {busy ? "Building…" : "Build my three looks"}
         </button>
+      </div>
+      {!face && <p className="dim" style={{ fontSize: 12.5, textAlign: "center", margin: "8px 0 0" }}>Reading your skin type…</p>}
+    </section>
+  );
+}
+
+/* ---------- pan capture (camera again, small) ---------- */
+
+function PanCapture({ onShot, onCancel }: { onShot: (dataUrl: string) => void; onCancel: () => void }) {
+  const cam = useCamera();
+  useEffect(() => { void cam.start(); return () => cam.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onFile = (f: File | undefined) => {
+    if (!f) return;
+    const r = new FileReader();
+    r.onload = () => onShot(String(r.result));
+    r.readAsDataURL(f);
+  };
+
+  return (
+    <section className="fade-in" aria-label="Photograph the pan">
+      <div className="stage-head">
+        <button className="mini-link" onClick={onCancel}>Back</button>
+        <p className="eyebrow" style={{ margin: 0 }}>The pan</p>
+      </div>
+      <div className="camera-stage">
+        <video ref={cam.videoRef} playsInline muted aria-label="Camera preview for the product pan" />
+        {cam.state === "denied" && (
+          <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "rgba(0,0,0,.72)", padding: 22, textAlign: "center" }}>
+            <div>
+              <p style={{ margin: "0 0 12px" }}>Camera unavailable</p>
+              <label className="btn btn-primary" style={{ display: "inline-block" }}>
+                Choose a photo
+                <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+              </label>
+            </div>
+          </div>
+        )}
+        <p className="stage-hint" aria-hidden>Fill the frame with the color. Plain background, no glare.</p>
+      </div>
+      <div className="row" style={{ marginTop: 14 }}>
+        <button className="btn btn-primary btn-wide" disabled={cam.state !== "live"} onClick={() => { const p = cam.grab(); if (p) onShot(p); }}>
+          Photograph the pan
+        </button>
+      </div>
+      <div style={{ textAlign: "center", marginTop: 10 }}>
+        <label className="mini-link" style={{ cursor: "pointer" }}>
+          No camera? Choose a photo
+          <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+        </label>
       </div>
     </section>
   );
 }
 
-function Swatch({ label, hex, lockMark }: { label: string; hex: string; lockMark?: boolean }) {
-  return (
-    <div className="swatch">
-      <div className="fill" style={{ background: hex }} />
-      <div className="meta">
-        <p style={{ margin: 0, fontWeight: 650, fontSize: 14 }}>{label}{lockMark ? " · locked" : ""}</p>
-        <p className="hex" style={{ margin: "1px 0 0" }}>{hex}</p>
-      </div>
-    </div>
-  );
-}
+/* ---------- mood + event tray (shared) ---------- */
 
-/* ================= screen 5: mood + event ================= */
-
-function MoodEventScreen({
-  mood, event, onMood, onEvent, onBuild, loading,
+function MoodEventTray({
+  mood, event, onMood, onEvent, title = true,
 }: {
-  mood: Mood | null; event: Event | null;
+  mood: Mood; event: Event;
   onMood: (m: Mood) => void; onEvent: (e: Event) => void;
-  onBuild: () => void; loading: boolean;
+  title?: boolean;
 }) {
   return (
-    <section className="fade-in" aria-label="Mood and event">
-      <p className="eyebrow">Almost there</p>
-      <h2 className="display" style={{ fontSize: 34, marginBottom: 6 }}>Dress the moment</h2>
-      <p className="muted" style={{ marginTop: 0, marginBottom: 20, fontSize: 14.5 }}>
-        They shape the layers around your locked shade — never the shade itself.
-      </p>
-
-      <p className="eyebrow" style={{ marginBottom: 8 }}>Mood</p>
+    <div className="tray" style={{ marginTop: 14 }} aria-label="Mood and event">
+      {title && <p className="eyebrow" style={{ margin: "0 0 8px" }}>Dress the moment</p>}
+      <p className="eyebrow" style={{ margin: "0 0 6px", fontSize: 10 }}>Mood</p>
       <div className="chip-row" role="group" aria-label="Mood">
         {MOODS.map((m) => (
           <button key={m} className="chip" aria-pressed={mood === m} onClick={() => onMood(m)}>{m}</button>
         ))}
       </div>
-
-      <p className="eyebrow" style={{ margin: "18px 0 8px" }}>Event</p>
+      <p className="eyebrow" style={{ margin: "10px 0 6px", fontSize: 10 }}>Event</p>
       <div className="chip-row" role="group" aria-label="Event">
         {EVENTS.map((e) => (
           <button key={e} className="chip" aria-pressed={event === e} onClick={() => onEvent(e)}>{e}</button>
         ))}
       </div>
-
-      {mood && event && (
-        <p className="muted fade-in" style={{ fontSize: 14.5, marginTop: 18 }}>
-          Looks built for <strong style={{ color: "var(--ink)" }}>{mood} × {event}</strong>.
-        </p>
-      )}
-
-      <div style={{ marginTop: 22 }}>
-        <button className="btn btn-primary btn-wide" disabled={!mood || !event || loading} onClick={onBuild}>
-          {loading ? "Building…" : "Build my three looks"}
-        </button>
-      </div>
-    </section>
+    </div>
   );
 }
 
-/* ================= screen 6: the looks ================= */
+/* ================= beat 3: the looks are the app ================= */
 
 const ROLE_LABEL: Record<Look["role"], string> = { anchor: "Anchor", lift: "Lift", statement: "Statement" };
 
-function LooksScreen({
-  looks, lockHex, category, onShuffle, onChange, onRestart, busy,
+function LooksStage({
+  photo, looks, lock, mood, event, onMood, onEvent, pairDirty, onRebuild, onShuffle, onRestart, busy,
 }: {
-  looks: LooksResult; lockHex: string; category: Category;
-  onShuffle: () => void; onChange: () => void; onRestart: () => void; busy: boolean;
+  photo: string | null;
+  looks: LooksResult | null;
+  lock: LockInfo;
+  mood: Mood; event: Event;
+  onMood: (m: Mood) => void; onEvent: (e: Event) => void;
+  pairDirty: boolean;
+  onRebuild: () => void; onShuffle: () => void; onRestart: () => void;
+  busy: boolean;
 }) {
-  const out = looks.rendersLeft <= 0;
+  const [showHex, setShowHex] = useState(false);
+  if (!looks) {
+    // Loading: dimmed face + lock chip, never blank skeletons only.
+    return (
+      <section aria-label="Building your three looks" className="fade-in">
+        <div className="camera-stage dimmed">
+          {photo && <img src={photo} alt="Your photo, dimmed while we build" />}
+          <div className="lock-chip build-chip"><span className="dot" style={{ background: lock.onFaceHex }} />Building your three looks…</div>
+        </div>
+      </section>
+    );
+  }
+
+  const out = looks.rendersLeft < 3;
+
   return (
     <section aria-label="Your three looks">
-      <div className="row" style={{ marginBottom: 14 }}>
+      <div className="row" style={{ marginBottom: 12 }}>
         <div className="grow">
           <p className="eyebrow" style={{ margin: 0 }}>Your three looks</p>
-          <h2 className="display" style={{ fontSize: 30, margin: 0 }}>Built around your {category}</h2>
+          <h2 className="display" style={{ fontSize: 30, margin: 0 }}>Built around your {ZONE_WORD[lock.category]}</h2>
         </div>
-        <span className="lock-chip"><span className="dot" />{lockHex}</span>
+        <button
+          type="button"
+          className="lock-chip"
+          style={{ border: "none", font: "inherit", cursor: "pointer" }}
+          onClick={() => setShowHex((v) => !v)}
+          aria-pressed={showHex}
+          aria-label={`Locked color. Tap to ${showHex ? "hide" : "show"} the hex.`}
+        >
+          <span className="dot" style={{ background: lock.onFaceHex }} />
+          {showHex ? lock.onFaceHex : `Locked ${ZONE_WORD[lock.category]}`}
+        </button>
       </div>
 
       {looks.lockApproximated && (
-        <p className="muted" style={{ fontSize: 13.5, marginTop: 0 }}>
-          Your shade reads closest to this.
-        </p>
+        <p className="muted" style={{ fontSize: 13.5, marginTop: 0 }}>Your shade reads closest to this.</p>
       )}
 
-      <div style={{ display: "grid", gap: 16 }}>
-        {looks.looks.map((look) => <LookCard key={look.role} look={look} />)}
+      <div className="looks-strip" role="list" aria-label="Anchor, Lift, and Statement">
+        {looks.looks.map((look) => (
+          <LookCard key={look.role} look={look} lockPoint={lock.point} lockHex={lock.onFaceHex} lockCategory={lock.category} />
+        ))}
       </div>
 
-      <div className="row" style={{ marginTop: 20, flexWrap: "wrap", gap: 10 }}>
+      <div className="row" style={{ marginTop: 16, flexWrap: "wrap", gap: 10 }}>
         <button className="btn btn-primary" onClick={onShuffle} disabled={busy || out}>
-          {busy ? "Shuffling…" : out ? "No renders left" : "Shuffle the rest"}
+          {busy ? "Shuffling…" : out ? "No renders left" : "Shuffle"}
         </button>
-        <button className="btn btn-ghost" onClick={onChange} disabled={busy}>Change mood + event</button>
+        {pairDirty && (
+          <button className="btn btn-ghost" onClick={onRebuild} disabled={busy || out}>
+            Rebuild for {mood} × {event}
+          </button>
+        )}
         <button className="btn btn-ghost" onClick={onRestart} disabled={busy}>Start over</button>
       </div>
-      <p className="dim" style={{ fontSize: 12.5, marginTop: 10, marginBottom: 0 }}>
-        {looks.rendersLeft} render{looks.rendersLeft === 1 ? "" : "s"} left this session.
-      </p>
+
+      <div className="tray" style={{ marginTop: 14 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <p className="eyebrow" style={{ margin: 0 }}>Mood + event</p>
+          <span className="renders-pill">{looks.rendersLeft} render{looks.rendersLeft === 1 ? "" : "s"} left</span>
+        </div>
+        <div className="chip-row" role="group" aria-label="Mood" style={{ marginTop: 8 }}>
+          {MOODS.map((m) => (
+            <button key={m} className="chip" aria-pressed={mood === m} onClick={() => onMood(m)}>{m}</button>
+          ))}
+        </div>
+        <div className="chip-row" role="group" aria-label="Event" style={{ marginTop: 8 }}>
+          {EVENTS.map((e) => (
+            <button key={e} className="chip" aria-pressed={event === e} onClick={() => onEvent(e)}>{e}</button>
+          ))}
+        </div>
+      </div>
+
+      <p className="footer-note">Photos go to the YouCam service for analysis. We don't keep them.</p>
     </section>
   );
 }
 
-function LookCard({ look }: { look: Look }) {
+function ShareButton({ imageUrl, role }: { imageUrl: string; role: string }) {
+  const [canShare, setCanShare] = useState(false);
+  const [shared, setShared] = useState(false);
+  useEffect(() => {
+    setCanShare(typeof navigator !== "undefined" && typeof navigator.share === "function");
+  }, []);
+  if (!canShare) return null;
   return (
-    <article className="look-card fade-in">
+    <button
+      className="mini-btn"
+      onClick={() => {
+        const data: ShareData = { title: `One Piece Looks - ${ROLE_LABEL[role as Look["role"]]}`, text: "My three looks" };
+        if (!imageUrl.startsWith("data:")) data.url = imageUrl;
+        navigator.share?.(data).then(() => {
+          setShared(true);
+          setTimeout(() => setShared(false), 2000);
+        }).catch(() => undefined);
+      }}
+      aria-label={`Share the ${ROLE_LABEL[role as Look["role"]]} look`}
+    >
+      {shared ? "Shared" : "Share"}
+    </button>
+  );
+}
+
+function LookCard({
+  look, lockPoint, lockHex, lockCategory,
+}: {
+  look: Look;
+  lockPoint: SamplePoint;
+  lockHex: string;
+  lockCategory: Category;
+}) {
+  const [saved, setSaved] = useState(false);
+
+  async function save() {
+    try {
+      const url = look.imageUrl;
+      const a = document.createElement("a");
+      if (url.startsWith("data:")) {
+        a.href = url;
+      } else {
+        const blob = await fetch(url).then((r) => r.blob());
+        a.href = URL.createObjectURL(blob);
+      }
+      a.download = `one-piece-${look.role}.jpg`;
+      a.click();
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {
+      window.open(look.imageUrl, "_blank", "noopener");
+    }
+  }
+
+  return (
+    <article className="look-card fade-in" role="listitem">
       <div className="img-wrap">
-        <img src={look.imageUrl} alt={`${ROLE_LABEL[look.role]} look render`} />
+        <img src={look.imageUrl} alt={`${ROLE_LABEL[look.role]} look on your face`} />
+        <span className="role-tag">{ROLE_LABEL[look.role]}</span>
+        <span
+          className="lock-ring compact"
+          style={{ left: `${lockPoint.xPct}%`, top: `${lockPoint.yPct}%` }}
+          aria-label={`${lockCategory} locked at this spot, color ${lockHex}`}
+          title={`${lockCategory} locked · ${lockHex}`}
+        />
       </div>
       <div className="look-head">
-        <h3 className="display" style={{ fontSize: 22, margin: 0, flexGrow: 1 }}>{ROLE_LABEL[look.role]}</h3>
+        <h3 className="display" style={{ fontSize: 20, margin: 0, flexGrow: 1 }}>{ROLE_LABEL[look.role]}</h3>
         {look.lockApproximated && <span className="recipe-chip">nearest shade</span>}
+        <ShareButton imageUrl={look.imageUrl} role={look.role} />
+        <button className="mini-btn" onClick={() => void save()} aria-label={`Save the ${ROLE_LABEL[look.role]} render`}>
+          {saved ? "Saved" : "Save"}
+        </button>
       </div>
       <div className="look-chips">
         {look.chips.map((c, i) => (
@@ -696,11 +733,6 @@ function LookCard({ look }: { look: Look }) {
             {c.label}{c.detail ? ` · ${c.detail}` : ""}
           </span>
         ))}
-        {look.shop && (
-          <a className="recipe-chip" href={look.shop.url} target="_blank" rel="noreferrer noopener">
-            {look.shop.label} ↗
-          </a>
-        )}
       </div>
     </article>
   );

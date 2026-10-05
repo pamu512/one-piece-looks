@@ -123,6 +123,8 @@ export const api = {
     callRetry<LooksResult>(`/api/session/${id}/shuffle`, { method: "POST", body: "{}" }),
 };
 
+export const TONE_DEPTHS = ["01", "02", "03", "04", "05", "06"] as const;
+
 /* ---------- color helpers ---------- */
 
 export function rgbToHex(r: number, g: number, b: number): string {

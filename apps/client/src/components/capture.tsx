@@ -1,72 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, type Category, sampleDisk } from "../lib/types";
-
-/* ---------- capture guidance per category ---------- */
-
-export const PRODUCT_GUIDE: Record<Category, { shape: "oval" | "circle" | "slim"; lines: string[] }> = {
-  lip: { shape: "oval", lines: ["Rest the bullet in view", "Plain background, even light", "Let it fill the frame — no glare"] },
-  cheek: { shape: "circle", lines: ["Open the pan flat to the camera", "Plain background, even light", "One shade filling the frame"] },
-  eye: { shape: "circle", lines: ["Hold the pan or pressed shade steady", "Plain background, even light", "One shade filling the frame"] },
-  brow: { shape: "slim", lines: ["Show the pencil tip or pomade pot", "Plain background, even light", "Close enough to read the color"] },
-  liner: { shape: "slim", lines: ["Show the tip or applicator", "Plain background, even light", "Close enough to read the color"] },
-};
-
-export const FACE_GUIDE: Record<Category, { lines: string[]; zone: string }> = {
-  lip: { lines: ["Wear it, then shoot", "Mouth closed, straight-on", "Same spot, same light as before"], zone: "Tap the center of your lips" },
-  cheek: { lines: ["Wear it, then shoot", "A slight smile helps", "Same spot, same light as before"], zone: "Tap the apple of your cheek" },
-  eye: { lines: ["Wear it, then shoot", "Eyes open, looking straight", "Same spot, same light as before"], zone: "Tap the center of your lid" },
-  brow: { lines: ["Wear it, then shoot", "Neutral face, brows relaxed", "Same spot, same light as before"], zone: "Tap the middle of your brow" },
-  liner: { lines: ["Wear it, then shoot", "Eyes open, looking straight", "Same spot, same light as before"], zone: "Tap along your upper lash line" },
-};
-
-/** Per-category gate: returns the single most relevant retake reason, or null. */
-export function faceGate(
-  category: Category,
-  onFaceHex: string,
-  skinRefHex: string | null,
-): { reason: string; fix: string } | null {
-  if (!skinRefHex) return null; // no reference sample yet: nothing to compare
-  const { contrastRatio } = require0();
-  const cr = contrastRatio(onFaceHex, skinRefHex);
-  const cd = colorDistance0(onFaceHex, skinRefHex);
-  const tooClose =
-    category === "lip" ? cd < 60 :
-    category === "cheek" ? cd < 45 :
-    category === "eye" ? cd < 45 :
-    category === "brow" ? cd < 40 :
-    cd < 40;
-  if (tooClose || cr < 1.18) {
-    const fix: Record<Category, string> = {
-      lip: "apply a touch more",
-      cheek: "a little more on the apple",
-      eye: "a touch more than usual",
-      brow: "fill a shade heavier",
-      liner: "slightly thicker reads better",
-    };
-    return { reason: "Hard to read the color on your skin", fix: fix[category] };
-  }
-  return null;
-}
-// tiny local aliases to avoid circular import cost at module init
-function require0() {
-  return { contrastRatio: (a: string, b: string) => {
-    const lum = (h: string) => {
-      const s = h.replace("#", "");
-      const c: [number, number, number] = [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16) || 0) as [number, number, number];
-      const f = (v: number) => (v / 255 <= 0.04045 ? v / 255 / 12.92 : Math.pow((v / 255 + 0.055) / 1.055, 2.4));
-      return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]);
-    };
-    const l1 = lum(a), l2 = lum(b);
-    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-  } };
-}
-function colorDistance0(a: string, b: string) {
-  const p = (h: string): [number, number, number] =>
-    [0, 2, 4].map((i) => parseInt(h.replace("#", "").slice(i, i + 2), 16) || 0) as [number, number, number];
-  const [r1, g1, b1] = p(a), [r2, g2, b2] = p(b);
-  const rm = (r1 + r2) / 2;
-  return Math.sqrt((2 + rm / 256) * (r1 - r2) ** 2 + 4 * (g1 - g2) ** 2 + (2 + (255 - rm) / 256) * (b1 - b2) ** 2);
-}
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { ApiError, hexToRgb, sampleDisk, type Category } from "../lib/types";
 
 /* ---------- camera hook with file-pick fallback ---------- */
 
@@ -115,121 +48,137 @@ export function useCamera() {
   return { videoRef, state, start, stop, grab };
 }
 
-/* ---------- tap-to-sample over a still photo ---------- */
+/* ---------- face framing guide overlay ---------- */
 
-export function TapSampleStage({
-  photoDataUrl,
-  zoneHint,
-  onSample,
-  sampleMark,
-}: {
-  photoDataUrl: string;
-  zoneHint: string;
-  onSample: (hex: string, ctx: CanvasRenderingContext2D, pt: { x: number; y: number }) => void;
-  sampleMark: { x: number; y: number } | null;
-}) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [dims, setDims] = useState<{ w: number; h: number } | null>(null);
-
-  const handle = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const c = canvasRef.current;
-    if (!c) return;
-    const rect = c.getBoundingClientRect();
-    const x = Math.round(((e.clientX - rect.left) / rect.width) * c.width);
-    const y = Math.round(((e.clientY - rect.top) / rect.height) * c.height);
-    const ctx = c.getContext("2d", { willReadFrequently: true })!;
-    const hex = sampleDisk(ctx, x, y, Math.max(6, Math.round(c.width * 0.012)));
-    onSample(hex, ctx, { x: e.clientX - rect.left, y: e.clientY - rect.top });
-  };
-
-  return (
-    <div className="camera-stage">
-      <canvas
-        ref={(c) => {
-          if (!c) return;
-          canvasRef.current = c;
-          const img = new Image();
-          img.onload = () => {
-            c.width = img.naturalWidth;
-            c.height = img.naturalHeight;
-            c.getContext("2d", { willReadFrequently: true })!.drawImage(img, 0, 0);
-            setDims({ w: c.width, h: c.height });
-          };
-          img.src = photoDataUrl;
-        }}
-        onClick={handle}
-        role="button"
-        tabIndex={0}
-        aria-label={`Sample point — ${zoneHint}`}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            // keyboard: sample center of image as accessible default
-            const c = canvasRef.current;
-            if (!c) return;
-            const ctx = c.getContext("2d", { willReadFrequently: true })!;
-            const hex = sampleDisk(ctx, Math.round(c.width / 2), Math.round(c.height / 2), Math.max(6, Math.round(c.width * 0.012)));
-            const rect = c.getBoundingClientRect();
-            onSample(hex, ctx, { x: rect.width / 2, y: rect.height / 2 });
-          }
-        }}
-      />
-      {sampleMark && (
-        <span
-          aria-hidden
-          style={{
-            position: "absolute",
-            left: `calc(${(sampleMark.x)}px)`,
-            top: `calc(${(sampleMark.y)}px)`,
-            transform: "translate(-50%, -50%)",
-            width: 26, height: 26, borderRadius: "50%",
-            border: "2.5px solid #fff",
-            boxShadow: "0 0 0 2px rgba(0,0,0,.55)",
-            pointerEvents: "none",
-          }}
-        />
-      )}
-      <div
-        aria-hidden
-        style={{
-          position: "absolute", left: 12, right: 12, bottom: 12,
-          textAlign: "center", fontSize: 13, color: "#fff",
-          textShadow: "0 1px 8px rgba(0,0,0,.8)", pointerEvents: "none",
-        }}
-      >
-        {zoneHint}
-      </div>
-      {dims ? null : <div className="skel" style={{ position: "absolute", inset: 0 }} />}
-    </div>
-  );
-}
-
-/* ---------- framing guide overlay ---------- */
-
-export function GuideOverlay({ kind }: { kind: "oval" | "circle" | "slim" | "face" }) {
+export function FaceGuideOverlay() {
   const stroke = "rgba(255,255,255,.75)";
   const dash = "rgba(255,255,255,.35)";
   return (
     <svg className="guide-overlay" viewBox="0 0 300 400" aria-hidden>
-      {kind === "oval" && <ellipse cx="150" cy="200" rx="72" ry="92" fill="none" stroke={stroke} strokeWidth="2" strokeDasharray="10 8" />}
-      {kind === "circle" && <circle cx="150" cy="200" r="95" fill="none" stroke={stroke} strokeWidth="2" strokeDasharray="10 8" />}
-      {kind === "slim" && <rect x="112" y="130" width="76" height="140" rx="34" fill="none" stroke={stroke} strokeWidth="2" strokeDasharray="10 8" />}
-      {kind === "face" && (
-        <>
-          <ellipse cx="150" cy="196" rx="88" ry="116" fill="none" stroke={stroke} strokeWidth="2" strokeDasharray="12 9" />
-          <line x1="66" y1="150" x2="234" y2="150" stroke={dash} strokeWidth="1.5" />
-          <line x1="66" y1="196" x2="234" y2="196" stroke={dash} strokeWidth="1.5" />
-          <line x1="66" y1="242" x2="234" y2="242" stroke={dash} strokeWidth="1.5" />
-        </>
-      )}
+      <ellipse cx="150" cy="196" rx="88" ry="116" fill="none" stroke={stroke} strokeWidth="2" strokeDasharray="12 9" />
+      <line x1="66" y1="150" x2="234" y2="150" stroke={dash} strokeWidth="1.5" />
+      <line x1="66" y1="196" x2="234" y2="196" stroke={dash} strokeWidth="1.5" />
+      <line x1="66" y1="242" x2="234" y2="242" stroke={dash} strokeWidth="1.5" />
     </svg>
   );
+}
+
+/* ---------- tap-to-sample canvas (photo stays on stage) ---------- */
+
+export interface SamplePoint { xPct: number; yPct: number }
+
+export interface SampleCanvasHandle {
+  /** Sample at fractional coordinates (0..1) of the photo. */
+  sampleAt: (fx: number, fy: number) => void;
+}
+
+/**
+ * Full-screen still + tap sampling. The photo never leaves this stage:
+ * overlays (zone targets, lock ring, gate line) render on top of it.
+ */
+export const SampleCanvas = forwardRef<SampleCanvasHandle, {
+  src: string;
+  ariaLabel: string;
+  onSample: (hex: string, pt: SamplePoint) => void;
+  children?: React.ReactNode;
+  disabled?: boolean;
+}>(function SampleCanvas({ src, ariaLabel, onSample, children, disabled = false }, ref) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    setReady(false);
+    const img = new Image();
+    img.onload = () => {
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext("2d", { willReadFrequently: true })!.drawImage(img, 0, 0);
+      setReady(true);
+    };
+    img.src = src;
+  }, [src]);
+
+  const sampleAt = useCallback((fx: number, fy: number) => {
+    const c = canvasRef.current;
+    if (!c || !c.width) return;
+    const x = Math.round(fx * c.width);
+    const y = Math.round(fy * c.height);
+    const ctx = c.getContext("2d", { willReadFrequently: true })!;
+    const hex = sampleDisk(ctx, x, y, Math.max(6, Math.round(c.width * 0.012)));
+    onSample(hex, { xPct: fx * 100, yPct: fy * 100 });
+  }, [onSample]);
+
+  useImperativeHandle(ref, () => ({ sampleAt }), [sampleAt]);
+
+  return (
+    <div className="camera-stage">
+      <canvas
+        ref={canvasRef}
+        onClick={(e) => {
+          if (disabled) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          sampleAt((e.clientX - rect.left) / rect.width, (e.clientY - rect.top) / rect.height);
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={ariaLabel}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            sampleAt(0.5, 0.5); // keyboard: sample center as accessible default
+          }
+        }}
+      />
+      {children}
+      {ready ? null : <div className="skel" style={{ position: "absolute", inset: 0 }} />}
+    </div>
+  );
+});
+
+/* ---------- the lock ring: stamp on the tap point ---------- */
+
+export function LockRing({
+  point, hex, category, reveal, onToggle, compact = false,
+}: {
+  point: SamplePoint; hex: string; category: Category; reveal: boolean; onToggle: () => void; compact?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`lock-ring${compact ? " compact" : ""}`}
+      style={{ left: `${point.xPct}%`, top: `${point.yPct}%` }}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      aria-pressed={reveal}
+      aria-label={`Locked ${category}${reveal ? ` color ${hex}` : " color"}. Tap to ${reveal ? "hide" : "show"} the hex.`}
+    >
+      <span className="lock-ring-dot" style={{ borderColor: hex }} />
+      <span className="lock-ring-label">Locked{reveal ? ` · ${hex}` : ""}</span>
+    </button>
+  );
+}
+
+/* ---------- soft skin gate: a line on the photo, never a blocking lab ---------- */
+
+/**
+ * Heuristic: does this sample read as bare skin rather than makeup?
+ * Low chroma, red dominant, mid luma. Soft signal only - it drives a nudge
+ * line on the photo; continuing anyway marks the sample unverified.
+ */
+export function looksLikeSkin(hex: string): boolean {
+  const { r, g, b } = hexToRgb(hex);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const chroma = (max - min) / 255;
+  const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  const redDominant = r >= g && r >= b && r - b > 8;
+  return chroma < 0.24 && redDominant && luma > 0.3 && luma < 0.92;
 }
 
 /* ---------- loading phases ---------- */
 
 export const PHASE_COPY = {
-  sampling: "Sampling your color",
   skin: "Reading your skin type",
   building: "Building your three looks",
 } as const;
@@ -251,7 +200,7 @@ export function CalmError({ msg, onRetry, onBack }: { msg: string; onRetry?: (()
     <div className="calm-card fade-in" role="alert">
       <p style={{ margin: "0 0 4px", fontWeight: 600 }}>That didn’t go through</p>
       <p className="muted" style={{ margin: "0 0 14px", fontSize: 14 }}>{msg}</p>
-      <p className="dim" style={{ margin: "0 0 14px", fontSize: 13 }}>Your photos and locked color are still here.</p>
+      <p className="dim" style={{ margin: "0 0 14px", fontSize: 13 }}>Your photo and locked color are still here.</p>
       <div className="row">
         {onRetry && <button className="btn btn-primary" onClick={onRetry}>Try again</button>}
         {onBack && <button className="btn btn-ghost" onClick={onBack}>Back</button>}

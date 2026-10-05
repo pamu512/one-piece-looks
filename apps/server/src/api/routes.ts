@@ -18,7 +18,8 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { store, type SessionData } from "../session/store.js";
 import { YoucamError, runSkinAnalysis, runSkinTone, runMakeupVto, uploadFile } from "../youcam/client.js";
-import { mockSkinAnalysis, mockSkinTone, mockRender } from "../youcam/mock.js";
+import { mockSkinAnalysis, mockSkinTone } from "../youcam/mock.js";
+import { faceCardDataUrl } from "../youcam/facecard.js";
 import {
   buildLooks,
   assembleLook,
@@ -243,7 +244,10 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
     for (const b of built) {
       let imageUrl: string;
       if (usingMock()) {
-        imageUrl = mockRender(b.role, b.effects, input.seed);
+        // Mock renders composite the real effect list onto the user's own
+        // face photo (API contract: imageUrl is a face render, never an
+        // abstract color-bar card).
+        imageUrl = faceCardDataUrl(b.role, b.effects, input.seed, s.faceImageBase64!);
       } else {
         // Upload once per session; reuse fileId across renders.
         if (!s.faceFileId) {
