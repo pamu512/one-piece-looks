@@ -24,7 +24,7 @@
  */
 
 import {
-  BROW_MID_Y, decideFaceBox, EYE_BAND, MOUTH_BAND, eyeBand, mouthBand,
+  BROW_MID_Y, clampCenterInBand, decideFaceBox, EYE_BAND, MOUTH_BAND, eyeBand, mouthBand,
 } from "./faceFrame";
 import { detectFaceFrameModel } from "./faceModel";
 
@@ -222,7 +222,7 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
     const r = 8;
     let bestL = Infinity, bestR = Infinity;
     for (let gy = Math.floor(eye.y0 * 100); gy <= Math.floor(eye.y1 * 100); gy += 2) {
-      for (let gx = Math.floor((fx0 + fw * 0.06) * 100); gx <= Math.floor((fx0 + fw * 0.94) * 100); gx += 2) {
+      for (let gx = Math.floor(eye.x0 * 100); gx <= Math.floor(eye.x1 * 100); gx += 2) {
         const [rr, gg, bb] = patchMean(ctx, gx / 100, gy / 100, r / 2);
         const lum = 0.299 * rr + 0.587 * gg + 0.114 * bb;
         if (gx / 100 < cx) {
@@ -238,6 +238,15 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
   if (!eyeL) eyeL = [cx - fw * 0.19, eyeMidY];
   if (!eyeR) eyeR = [cx + fw * 0.19, eyeMidY];
   const eyeR2 = Math.max(fw * 0.055, 0.035);
+  const eyeRy = eyeR2 * 0.62;
+  eyeL = [
+    clampCenterInBand(eyeL[0], eye.x0, eye.x1, eyeR2),
+    clampCenterInBand(eyeL[1], eye.y0, eye.y1, eyeRy),
+  ];
+  eyeR = [
+    clampCenterInBand(eyeR[0], eye.x0, eye.x1, eyeR2),
+    clampCenterInBand(eyeR[1], eye.y0, eye.y1, eyeRy),
+  ];
 
   // --- lips: redness peak inside the WFLW mouth band of faceBox ---
   const mouth = mouthBand(faceBox);
@@ -258,11 +267,13 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
   }
 
   const lipR = { rx: fw * 0.11, ry: Math.max(fh * 0.035, 0.02) };
+  const lipCx = clampCenterInBand(lip[0], mouth.x0, mouth.x1, lipR.rx);
+  const lipCy = clampCenterInBand(lip[1], mouth.y0, mouth.y1, lipR.ry);
   const browY = fy0 + fh * BROW_MID_Y;
 
   return {
     faceBox,
-    lip: polyFromBox(lip[0], lip[1], lipR.rx, lipR.ry, 10),
+    lip: polyFromBox(lipCx, lipCy, lipR.rx, lipR.ry, 10),
     eyeL: polyFromBox(eyeL[0], eyeL[1], eyeR2, eyeR2 * 0.62, 8),
     eyeR: polyFromBox(eyeR[0], eyeR[1], eyeR2, eyeR2 * 0.62, 8),
     browL: polyFromBox(eyeL[0], (eyeL[1] + browY) / 2, eyeR2 * 1.15, eyeR2 * 0.32, 8),

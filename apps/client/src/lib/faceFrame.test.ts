@@ -16,7 +16,7 @@ import test from "node:test";
 
 import {
   BROW_MID_Y, EYE_BAND, HAND_BAND_Y, MOUTH_BAND,
-  clampFaceBox, decideFaceBox, eyeBand, mouthBand, portraitPriorFaceBox,
+  clampCenterInBand, clampFaceBox, decideFaceBox, eyeBand, mouthBand, portraitPriorFaceBox,
 } from "./faceFrame.ts";
 import type { FaceBox } from "./face.ts";
 
@@ -37,6 +37,14 @@ test("WFLW band constants derive from the test split (2500 faces)", () => {
   // WFLW reality check: mouth sits below eyes inside any face box.
   assert.ok(MOUTH_BAND.y0 > EYE_BAND.y1);
   assert.ok(BROW_MID_Y < EYE_BAND.y0 + 0.1);
+});
+
+test("clampCenterInBand keeps the patch inside the band", () => {
+  assert.equal(clampCenterInBand(0.5, 0.2, 0.8, 0.05), 0.5);
+  assert.equal(clampCenterInBand(0.22, 0.2, 0.8, 0.05), 0.25);
+  assert.equal(clampCenterInBand(0.9, 0.2, 0.8, 0.05), 0.75);
+  // Band thinner than the patch: midpoint, still inside.
+  assert.equal(clampCenterInBand(0.1, 0.4, 0.46, 0.05), (0.4 + 0.46) / 2);
 });
 
 test("mouth and eye bands stay inside their parent faceBox", () => {

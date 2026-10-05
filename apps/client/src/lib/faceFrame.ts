@@ -16,7 +16,7 @@
  *    (mouthBand / eyeBand below), so nothing below faceBox can win.
  *
  * Band numbers come from apps/client/src/lib/face-bands.json (WFLW, 7500
- * train / 2500 test faces; regenerate with scratch/train/wflw_bands.py).
+ * train / 2500 test faces; regenerate with scripts/train/wflw-bands.py).
  * The constants below are the test-split p5/p95 values, widened slightly
  * toward box-interior margins to tolerate box jitter.
  */
@@ -47,7 +47,7 @@ export const MOUTH_BAND = {
 /** Eye band inside any faceBox: WFLW eye_y p5..p95, margin-widened. */
 export const EYE_BAND = {
   y0: Math.floor((TEST_EYE_P5 - 0.03) * 100) / 100, // 0.22
-  y1: Math.ceil((TEST_EYE_P95 + 0.03) * 100) / 100, // 0.52
+  y1: Math.ceil((TEST_EYE_P95 + 0.03) * 100) / 100, // 0.53
   x0: 0.08,
   x1: 0.92,
 } as const;
@@ -112,6 +112,17 @@ export function clampFaceBox(raw: FaceBox, opts?: { faceFillsFrame?: boolean }):
     }
   }
   return box;
+}
+
+/**
+ * Pull a patch center into [lo, hi] so the patch of radius r stays inside.
+ * A band thinner than the patch collapses to the midpoint.
+ */
+export function clampCenterInBand(v: number, lo: number, hi: number, r: number): number {
+  const a = lo + r;
+  const b = hi - r;
+  if (!(b > a)) return (lo + hi) / 2;
+  return Math.min(b, Math.max(a, v));
 }
 
 /** Absolute-frame rect (fractions) of the mouth search band inside faceBox. */
