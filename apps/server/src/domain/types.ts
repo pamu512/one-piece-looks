@@ -128,6 +128,20 @@ export interface FaceAnalysisRequest {
    * i.e. when the response reports toneFallback: true and the user has picked.
    */
   tone?: { depth: ToneDepth; temperature: ToneTemperature };
+  /**
+   * Optional client-detected face landmarks (fractional 4:5 coordinates).
+   * Additive: used by mock compositing to align patches to the real face.
+   */
+  landmarks?: {
+    faceBox?: { x: number; y: number; w: number; h: number };
+    lip?: [number, number][];
+    eyeL?: [number, number][];
+    eyeR?: [number, number][];
+    browL?: [number, number][];
+    browR?: [number, number][];
+    cheekL?: [number, number][];
+    cheekR?: [number, number][];
+  };
 }
 
 /** Result of the face analysis step. */

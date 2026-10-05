@@ -1,10 +1,11 @@
 /**
  * Face compositor tests: mock renders must be the user's own face photo
  * with the real effect colors drawn on it (API contract: imageUrl is a
- * face render, never an abstract color-bar card).
+ * face render, never an abstract color-bar card). The render contains no
+ * burned-in text, and landmark inputs clip patches to the real face zones.
  */
 import { describe, it, expect } from "vitest";
-import { faceCardDataUrl, faceCardSvg } from "./facecard.js";
+import { faceCardDataUrl, faceCardSvg, type FaceLandmarks } from "./facecard.js";
 import type { VtoEffect } from "./client.js";
 
 const FACE_B64 = Buffer.from("fake-jpeg-bytes-for-test").toString("base64");
@@ -14,6 +15,13 @@ const EFFECTS: VtoEffect[] = [
   { category: "blush", palettes: [{ color: "#e8a0a0", colorIntensity: 50 }] },
   { category: "skin_smooth", skinSmoothStrength: 40 },
 ];
+
+const LM: FaceLandmarks = {
+  faceBox: { x: 0.25, y: 0.15, w: 0.5, h: 0.6 },
+  lip: [[0.42, 0.68], [0.5, 0.7], [0.58, 0.68], [0.5, 0.74]],
+  eyeL: [[0.34, 0.42], [0.4, 0.4], [0.42, 0.44], [0.36, 0.45]],
+  eyeR: [[0.58, 0.42], [0.64, 0.4], [0.66, 0.44], [0.6, 0.45]],
+};
 
 describe("faceCardSvg", () => {
   it("embeds the session face photo as the base layer", () => {
@@ -31,7 +39,6 @@ describe("faceCardSvg", () => {
   it("skips skin_smooth (no visual zone)", () => {
     const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64);
     expect(svg.match(/<ellipse/g)?.length).toBeGreaterThan(0);
-    // lip zone draws once per side where applicable; just ensure ellipses exist
   });
 
   it("is deterministic for the same inputs", () => {
@@ -40,15 +47,50 @@ describe("faceCardSvg", () => {
     expect(a).toBe(b);
   });
 
-  it("badge shows the role and mock seed", () => {
+  it("contains no burned-in text (role, MOCK, seed) in the image", () => {
     const svg = faceCardSvg("statement", EFFECTS, 123, FACE_B64);
-    expect(svg).toContain(">Statement</text>");
-    expect(svg).toContain(`MOCK seed ${123 % 100000}`);
+    expect(svg).not.toContain("<text");
+    expect(svg).not.toContain("MOCK");
+    expect(svg).not.toContain("Statement");
   });
 
-  it("escapes hostile role strings", () => {
+  it("escapes hostile role strings without drawing them", () => {
     const svg = faceCardSvg(`<script>alert(1)</script>`, EFFECTS, 1, FACE_B64);
     expect(svg).not.toContain("<script>");
+    expect(svg).not.toContain("<text");
+  });
+
+  it("clips patches to landmark polygons when provided", () => {
+    const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64, LM);
+    expect(svg).toContain("<clipPath");
+    expect(svg).toContain("<polygon");
+    // lip polygon coordinates map to canvas pixels (4:5 geometry contract)
+    expect(svg).toContain("clip-");
+  });
+
+  it("falls back to framing-guide zones without landmarks", () => {
+    const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64);
+    expect(svg).not.toContain("<clipPath");
+    expect(svg.match(/<ellipse/g)?.length).toBeGreaterThan(0);
+  });
+
+  it("blends lip/lash/brow layers with multiply and supports with soft-light", () => {
+    const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64, LM);
+    expect(svg).toContain("mix-blend-mode:multiply");
+    expect(svg).toContain("mix-blend-mode:soft-light");
+  });
+
+  it("landmark lip centroid lands inside the lip polygon region", () => {
+    const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64, LM);
+    // Extract the first multiply layer ellipse (the lip) and check its center
+    const m = svg.match(/<ellipse cx="([0-9.]+)" cy="([0-9.]+)"[^>]*fill="#b3122e"/);
+    expect(m).not.toBeNull();
+    const cx = Number(m![1]), cy = Number(m![2]);
+    // LM lip spans x 420..580, y 500..925 on the 1000x1250 canvas
+    expect(cx).toBeGreaterThan(400);
+    expect(cx).toBeLessThan(600);
+    expect(cy).toBeGreaterThan(800);
+    expect(cy).toBeLessThan(950);
   });
 });
 

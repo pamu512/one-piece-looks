@@ -1,0 +1,85 @@
+{
+  "t": "2026-10-05T09:55:08.657Z",
+  "results": [
+    {
+      "id": "A1-live-face-band",
+      "pass": true,
+      "detail": "video band 100.0% of viewport, black 0.2%"
+    },
+    {
+      "id": "A4-zero-tap-lock",
+      "pass": true,
+      "detail": "zone grid unprompted: true"
+    },
+    {
+      "id": "A1-looks-face-band",
+      "pass": true,
+      "detail": "look band 90.3%"
+    },
+    {
+      "id": "A1-looks-not-black",
+      "pass": true,
+      "detail": "pure-black 0.3%"
+    },
+    {
+      "id": "A2-clean-first-paint",
+      "pass": true,
+      "detail": "[\"Start over\",\"Anchor\",\"Lift\",\"Statement\"]"
+    },
+    {
+      "id": "demo-first-look-15s",
+      "pass": true,
+      "detail": "first worn look at 2.3s"
+    },
+    {
+      "id": "B-saturation-up",
+      "pass": true,
+      "detail": "lip-band sat makeup 0.5473 vs bare 0.5211"
+    },
+    {
+      "id": "B5-hold-compare",
+      "pass": true,
+      "detail": "bare overlay shown during hold"
+    },
+    {
+      "id": "C-share-blob",
+      "pass": true,
+      "detail": "blob 546445B type=image/png pngSig=true"
+    },
+    {
+      "id": "B2-no-burned-text",
+      "pass": true,
+      "detail": "render contains no <text> node"
+    },
+    {
+      "id": "B4-shuffle-visible",
+      "pass": true,
+      "detail": "srcChanged=true, render diff mean 0.011/255, peak 20/255"
+    },
+    {
+      "id": "C2-soft-leads",
+      "pass": true,
+      "detail": "first mood chip: Soft"
+    },
+    {
+      "id": "A3-denied-branded",
+      "pass": true,
+      "detail": "denied frame avgLum 37.9"
+    },
+    {
+      "id": "A3-denied-cta-only",
+      "pass": true,
+      "detail": "texts: [\"One piece.Three looks.\",\"Choose a photo\",\"or try it with a sample face\"]"
+    },
+    {
+      "id": "A3-sample-face",
+      "pass": true,
+      "detail": "sample face option present"
+    },
+    {
+      "id": "console-clean",
+      "pass": true,
+      "detail": "0 errors"
+    }
+  ]
+}

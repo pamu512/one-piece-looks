@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { ApiError, hexToRgb, sampleDisk, type Category } from "../lib/types";
+import { hexToRgb, sampleDisk, type Category } from "../lib/types";
 
 /* ---------- camera hook with file-pick fallback ---------- */
 
@@ -48,33 +48,36 @@ export function useCamera() {
   return { videoRef, state, start, stop, grab };
 }
 
-/* ---------- face framing guide overlay ---------- */
+/* ---------- face framing guide: soft glowing oval ---------- */
 
 export function FaceGuideOverlay() {
-  const stroke = "rgba(255,255,255,.75)";
-  const dash = "rgba(255,255,255,.35)";
   return (
     <svg className="guide-overlay" viewBox="0 0 300 400" aria-hidden>
-      <ellipse cx="150" cy="196" rx="88" ry="116" fill="none" stroke={stroke} strokeWidth="2" strokeDasharray="12 9" />
-      <line x1="66" y1="150" x2="234" y2="150" stroke={dash} strokeWidth="1.5" />
-      <line x1="66" y1="196" x2="234" y2="196" stroke={dash} strokeWidth="1.5" />
-      <line x1="66" y1="242" x2="234" y2="242" stroke={dash} strokeWidth="1.5" />
+      <defs>
+        <radialGradient id="guideGlow" cx="50%" cy="50%" r="50%">
+          <stop offset="72%" stopColor="rgba(255,255,255,0)" />
+          <stop offset="88%" stopColor="rgba(255,255,255,0.30)" />
+          <stop offset="100%" stopColor="rgba(255,255,255,0)" />
+        </radialGradient>
+      </defs>
+      <ellipse cx="150" cy="196" rx="92" ry="120" fill="url(#guideGlow)" />
+      <ellipse cx="150" cy="196" rx="86" ry="113" fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="1.5" />
     </svg>
   );
 }
 
-/* ---------- tap-to-sample canvas (photo stays on stage) ---------- */
+/* ---------- tap-to-sample canvas over the normalized 4:5 frame ---------- */
 
 export interface SamplePoint { xPct: number; yPct: number }
 
 export interface SampleCanvasHandle {
-  /** Sample at fractional coordinates (0..1) of the photo. */
+  /** Sample at fractional coordinates (0..1) of the 4:5 frame. */
   sampleAt: (fx: number, fy: number) => void;
 }
 
 /**
- * Full-screen still + tap sampling. The photo never leaves this stage:
- * overlays (zone targets, lock ring, gate line) render on top of it.
+ * Full-bleed still + tap sampling. The photo never leaves this stage;
+ * overlays (scan line, lock ring, hints) render on top of it.
  */
 export const SampleCanvas = forwardRef<SampleCanvasHandle, {
   src: string;
@@ -113,7 +116,7 @@ export const SampleCanvas = forwardRef<SampleCanvasHandle, {
   useImperativeHandle(ref, () => ({ sampleAt }), [sampleAt]);
 
   return (
-    <div className="camera-stage">
+    <div className="face-fill">
       <canvas
         ref={canvasRef}
         onClick={(e) => {
@@ -128,7 +131,7 @@ export const SampleCanvas = forwardRef<SampleCanvasHandle, {
           if (disabled) return;
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
-            sampleAt(0.5, 0.5); // keyboard: sample center as accessible default
+            sampleAt(0.5, 0.7); // keyboard: sample the lip band as default
           }
         }}
       />
@@ -138,7 +141,7 @@ export const SampleCanvas = forwardRef<SampleCanvasHandle, {
   );
 });
 
-/* ---------- the lock ring: stamp on the tap point ---------- */
+/* ---------- the lock ring: stamp on the sampled point ---------- */
 
 export function LockRing({
   point, hex, category, reveal, onToggle, compact = false,
@@ -155,12 +158,24 @@ export function LockRing({
       aria-label={`Locked ${category}${reveal ? ` color ${hex}` : " color"}. Tap to ${reveal ? "hide" : "show"} the hex.`}
     >
       <span className="lock-ring-dot" style={{ borderColor: hex }} />
-      <span className="lock-ring-label">Locked{reveal ? ` · ${hex}` : ""}</span>
+      <span className="lock-ring-label">{reveal ? hex : "Locked"}</span>
     </button>
   );
 }
 
-/* ---------- soft skin gate: a line on the photo, never a blocking lab ---------- */
+/* ---------- "reading your color" scan animation ---------- */
+
+export function ScanLine({ active }: { active: boolean }) {
+  if (!active) return null;
+  return (
+    <div className="scan" aria-hidden>
+      <div className="scan-beam" />
+      <span className="scan-note" role="status" aria-live="polite">Reading your color…</span>
+    </div>
+  );
+}
+
+/* ---------- soft skin gate ---------- */
 
 /**
  * Heuristic: does this sample read as bare skin rather than makeup?
@@ -179,7 +194,7 @@ export function looksLikeSkin(hex: string): boolean {
 /* ---------- loading phases ---------- */
 
 export const PHASE_COPY = {
-  skin: "Reading your skin type",
+  skin: "Reading your skin",
   building: "Building your three looks",
 } as const;
 export type Phase = keyof typeof PHASE_COPY;
@@ -187,9 +202,7 @@ export type Phase = keyof typeof PHASE_COPY;
 export function PhaseLine({ phase }: { phase: Phase | null }) {
   if (!phase) return null;
   return (
-    <p className="muted" role="status" aria-live="polite" style={{ textAlign: "center", fontSize: 14.5 }}>
-      {PHASE_COPY[phase]}…
-    </p>
+    <p className="phase-line" role="status" aria-live="polite">{PHASE_COPY[phase]}…</p>
   );
 }
 
@@ -198,7 +211,7 @@ export function PhaseLine({ phase }: { phase: Phase | null }) {
 export function CalmError({ msg, onRetry, onBack }: { msg: string; onRetry?: (() => void) | undefined; onBack?: (() => void) | undefined }) {
   return (
     <div className="calm-card fade-in" role="alert">
-      <p style={{ margin: "0 0 4px", fontWeight: 600 }}>That didn’t go through</p>
+      <p style={{ margin: "0 0 4px", fontWeight: 600 }}>That didn't go through</p>
       <p className="muted" style={{ margin: "0 0 14px", fontSize: 14 }}>{msg}</p>
       <p className="dim" style={{ margin: "0 0 14px", fontSize: 13 }}>Your photo and locked color are still here.</p>
       <div className="row">
@@ -208,8 +221,4 @@ export function CalmError({ msg, onRetry, onBack }: { msg: string; onRetry?: (()
       </div>
     </div>
   );
-}
-
-export function isApiError(e: unknown): e is ApiError {
-  return e instanceof ApiError;
 }

@@ -31,6 +31,8 @@ export interface SessionData {
   shuffleCount: number;
   /** Cached YouCam fileId for the face photo (uploads are reusable). */
   faceFileId?: string;
+  /** Optional client face landmarks for mock compositing (fractions). */
+  landmarks?: import("../youcam/facecard.js").FaceLandmarks | undefined;
 }
 
 const TTL_MS = 2 * 60 * 60 * 1000; // 2h; hackathon demo sessions

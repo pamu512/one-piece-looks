@@ -1,0 +1,59 @@
+{
+  "mp4": "/Users/pamu/Projects/one-piece-looks/demos/opl-beauty-cam-demo2-20261005.mp4",
+  "bytes": 603940,
+  "durationSec": 24.52,
+  "firstLookMs": 6560,
+  "shareBlobBytes": 384580,
+  "marks": [
+    {
+      "t": 177,
+      "name": "mirror-live"
+    },
+    {
+      "t": 2458,
+      "name": "shutter"
+    },
+    {
+      "t": 3754,
+      "name": "auto-locked"
+    },
+    {
+      "t": 6560,
+      "name": "first-look"
+    },
+    {
+      "t": 11568,
+      "name": "lift"
+    },
+    {
+      "t": 13083,
+      "name": "hold-compare"
+    },
+    {
+      "t": 15589,
+      "name": "shuffled"
+    },
+    {
+      "t": 17828,
+      "name": "vibe-open"
+    },
+    {
+      "t": 19784,
+      "name": "rebuilt-nightout"
+    },
+    {
+      "t": 21879,
+      "name": "share-card"
+    }
+  ],
+  "gates": {
+    "firstLookBy14s": true,
+    "shareBlobPositive": true,
+    "durationUnder60": true,
+    "consoleClean": true,
+    "noDeniedHero": true,
+    "noStaticHoldOver4s": true
+  },
+  "errors": [],
+  "maxStaticSeconds": 1
+}

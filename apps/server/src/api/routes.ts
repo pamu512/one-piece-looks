@@ -19,7 +19,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { store, type SessionData } from "../session/store.js";
 import { YoucamError, runSkinAnalysis, runSkinTone, runMakeupVto, uploadFile } from "../youcam/client.js";
 import { mockSkinAnalysis, mockSkinTone } from "../youcam/mock.js";
-import { faceCardDataUrl } from "../youcam/facecard.js";
+import { faceCardDataUrl, type FaceLandmarks } from "../youcam/facecard.js";
 import {
   buildLooks,
   assembleLook,
@@ -59,6 +59,43 @@ const VALID_SKIN_TYPES: readonly SkinType[] = [
   "Oily & Redness",
   "Combination & Redness",
 ];
+
+/** Keep only well-formed landmark polygons (fractional coords 0..1.2). */
+function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const poly = (v: unknown): FaceLandmarks["lip"] => {
+    if (!Array.isArray(v) || v.length < 3 || v.length > 80) return undefined;
+    const out: [number, number][] = [];
+    for (const pt of v) {
+      if (!Array.isArray(pt) || pt.length !== 2) return undefined;
+      const x = Number(pt[0]), y = Number(pt[1]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return undefined;
+      if (x < -0.1 || x > 1.1 || y < -0.1 || y > 1.1) return undefined;
+      out.push([x, y]);
+    }
+    return out;
+  };
+  const box = (v: unknown): FaceLandmarks["faceBox"] => {
+    if (!v || typeof v !== "object") return undefined;
+    const b = v as Record<string, unknown>;
+    const x = Number(b.x), y = Number(b.y), w = Number(b.w), h = Number(b.h);
+    if (![x, y, w, h].every(Number.isFinite)) return undefined;
+    if (w <= 0 || h <= 0 || w > 1.2 || h > 1.2) return undefined;
+    return { x, y, w, h };
+  };
+  const lm: FaceLandmarks = {
+    ...(box(r.faceBox) ? { faceBox: box(r.faceBox) } : {}),
+    ...(poly(r.lip) ? { lip: poly(r.lip) } : {}),
+    ...(poly(r.eyeL) ? { eyeL: poly(r.eyeL) } : {}),
+    ...(poly(r.eyeR) ? { eyeR: poly(r.eyeR) } : {}),
+    ...(poly(r.browL) ? { browL: poly(r.browL) } : {}),
+    ...(poly(r.browR) ? { browR: poly(r.browR) } : {}),
+    ...(poly(r.cheekL) ? { cheekL: poly(r.cheekL) } : {}),
+    ...(poly(r.cheekR) ? { cheekR: poly(r.cheekR) } : {}),
+  };
+  return Object.keys(lm).length > 0 ? lm : undefined;
+}
 
 function isMood(v: unknown): v is Mood {
   return typeof v === "string" && (MOODS as readonly string[]).includes(v);
@@ -123,6 +160,8 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
     if (typeof body.faceImageBase64 !== "string" || body.faceImageBase64.length < 1000) {
       return errReply(reply, 400, "faceImageBase64 required", "bad_image", false);
     }
+    // Optional client face landmarks (additive; used by mock compositing).
+    if (body.landmarks) s.landmarks = sanitizeLandmarks(body.landmarks);
     // Retakes must not re-run analysis: only run when not yet analyzed.
     if (s.skinType && s.faceImageBase64 === body.faceImageBase64) {
       // same photo re-posted: idempotent
@@ -247,7 +286,7 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
         // Mock renders composite the real effect list onto the user's own
         // face photo (API contract: imageUrl is a face render, never an
         // abstract color-bar card).
-        imageUrl = faceCardDataUrl(b.role, b.effects, input.seed, s.faceImageBase64!);
+        imageUrl = faceCardDataUrl(b.role, b.effects, input.seed, s.faceImageBase64!, s.landmarks);
       } else {
         // Upload once per session; reuse fileId across renders.
         if (!s.faceFileId) {

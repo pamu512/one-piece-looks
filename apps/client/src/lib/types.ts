@@ -87,6 +87,18 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+/** Optional face landmarks sent with POST /face (fractional 4:5 coords). */
+export interface FaceLandmarksPayload {
+  faceBox?: { x: number; y: number; w: number; h: number };
+  lip?: [number, number][];
+  eyeL?: [number, number][];
+  eyeR?: [number, number][];
+  browL?: [number, number][];
+  browR?: [number, number][];
+  cheekL?: [number, number][];
+  cheekR?: [number, number][];
+}
+
 /* fetch wrapper with exactly-once retry on retryable errors. */
 async function callRetry<T>(path: string, init?: RequestInit): Promise<T> {
   try {
@@ -102,9 +114,9 @@ export const api = {
 
   postFace: (id: string, faceImageBase64: string, lock: {
     category: Category; onFaceHex: string; productHex: string; unverified: boolean;
-  }) => callRetry<FaceResult>(`/api/session/${id}/face`, {
+  }, landmarks?: FaceLandmarksPayload) => callRetry<FaceResult>(`/api/session/${id}/face`, {
     method: "POST",
-    body: JSON.stringify({ faceImageBase64, lock }),
+    body: JSON.stringify({ faceImageBase64, lock, ...(landmarks ? { landmarks } : {}) }),
   }),
 
   postTone: (id: string, depth: string, temperature: "warm" | "neutral" | "cool") =>
