@@ -92,6 +92,20 @@ describe("faceCardSvg", () => {
     expect(cy).toBeGreaterThan(800);
     expect(cy).toBeLessThan(950);
   });
+
+  it("statement supporting layers render stronger than lift for the same effects", () => {
+    const lift = faceCardSvg("lift", EFFECTS, 7, FACE_B64);
+    const statement = faceCardSvg("statement", EFFECTS, 7, FACE_B64);
+    expect(lift).not.toBe(statement);
+    const liftBlush = lift.match(/fill="#e8a0a0"[^>]*opacity="([0-9.]+)"/)
+      || lift.match(/opacity="([0-9.]+)"[^>]*fill="#e8a0a0"/);
+    const stmtBlush = statement.match(/fill="#e8a0a0"[^>]*opacity="([0-9.]+)"/)
+      || statement.match(/opacity="([0-9.]+)"[^>]*fill="#e8a0a0"/);
+    expect(liftBlush).not.toBeNull();
+    expect(stmtBlush).not.toBeNull();
+    expect(Number(stmtBlush![1])).toBeGreaterThan(Number(liftBlush![1]));
+  });
+
 });
 
 describe("faceCardDataUrl", () => {

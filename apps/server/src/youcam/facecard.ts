@@ -109,21 +109,33 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
-/** Opacity for a category so layered effects stay soft and photo-backed. */
+/**
+ * Opacity for a category so layered effects stay soft and photo-backed.
+ * Supporting layers are boosted so Soft x Casual still reads Lift/Statement
+ * apart from Anchor on camera and in mock demos (especially on light skin).
+ */
 function catOpacity(c: string, colorIntensity: number | undefined): number {
   const base: Record<string, number> = {
-    lip_color: 0.8,
-    blush: 0.3,
-    eye_shadow: 0.34,
-    eye_liner: 0.6,
-    eyebrows: 0.45,
-    eyelashes: 0.5,
-    contour: 0.16,
-    highlighter: 0.15,
+    lip_color: 0.85,
+    blush: 0.48,
+    eye_shadow: 0.5,
+    eye_liner: 0.72,
+    eyebrows: 0.58,
+    eyelashes: 0.62,
+    contour: 0.3,
+    highlighter: 0.28,
   };
-  const b = base[c] ?? 0.3;
+  const b = base[c] ?? 0.35;
   if (colorIntensity === undefined) return b;
-  return Math.max(0.08, Math.min(0.9, b * (0.6 + (colorIntensity / 100) * 0.6)));
+  return Math.max(0.1, Math.min(0.92, b * (0.65 + (colorIntensity / 100) * 0.55)));
+}
+
+/** Role scale for non-lock layers: Statement fullest, Lift mid, Anchor lip-only. */
+function roleLayerScale(role: string, category: string): number {
+  if (category === "lip_color") return 1;
+  if (role === "statement") return 1.55;
+  if (role === "lift") return 1.35;
+  return 1;
 }
 
 /* ---------- landmark helpers ---------- */
@@ -269,7 +281,7 @@ function clipIdFor(poly: FacePoly, salt: string): { id: string; points: string }
  * travels inside the data URL.
  */
 export function faceCardSvg(
-  _role: string,
+  role: string,
   effects: VtoEffect[],
   seed: number,
   facePhotoBase64: string,
@@ -294,7 +306,10 @@ export function faceCardSvg(
     if (category === "skin_smooth") continue;
     const color = effectColor(e);
     if (!color) continue;
-    const opacity = catOpacity(category, colorIntensityOf(e));
+    const opacity = Math.min(
+      0.92,
+      catOpacity(category, colorIntensityOf(e)) * roleLayerScale(role, category),
+    );
     const multiply = category === "lip_color" || category === "eye_liner" || category === "eyelashes" || category === "eyebrows";
     const bucket = multiply ? multLayers : softLayers;
 

@@ -587,11 +587,17 @@ body {
   display: block;
   animation: lookIn 200ms ease both;
 }
+.look-frame img.bare {
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
 .look-frame .bare-img {
   position: absolute;
   inset: 0;
   opacity: 0;
   transition: opacity 160ms ease;
+  z-index: 2;
+  pointer-events: none;
 }
 .look-frame .bare-img[data-on="1"] { opacity: 1; }
 @keyframes lookIn {
