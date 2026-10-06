@@ -215,14 +215,19 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
   const fx0 = faceBox.x, fy0 = faceBox.y, fw = faceBox.w, fh = faceBox.h;
   const cx = fx0 + fw / 2;
 
-  // --- eyes: darkest small patches in the WFLW eye band of faceBox ---
+  // --- eyes: independent darkest patch in each half of the iris band ---
+  // Ceil the start so the 0.01 grid cannot step above the band into the brow.
   const eye = eyeBand(faceBox);
   let eyeL: [number, number] | null = null, eyeR: [number, number] | null = null;
   {
     const r = 8;
     let bestL = Infinity, bestR = Infinity;
-    for (let gy = Math.floor(eye.y0 * 100); gy <= Math.floor(eye.y1 * 100); gy += 2) {
-      for (let gx = Math.floor(eye.x0 * 100); gx <= Math.floor(eye.x1 * 100); gx += 2) {
+    const gy0 = Math.ceil(eye.y0 * 100 - 1e-9);
+    const gy1 = Math.floor(eye.y1 * 100 + 1e-9);
+    const gx0 = Math.ceil(eye.x0 * 100 - 1e-9);
+    const gx1 = Math.floor(eye.x1 * 100 + 1e-9);
+    for (let gy = gy0; gy <= gy1; gy += 2) {
+      for (let gx = gx0; gx <= gx1; gx += 2) {
         const [rr, gg, bb] = patchMean(ctx, gx / 100, gy / 100, r / 2);
         const lum = 0.299 * rr + 0.587 * gg + 0.114 * bb;
         if (gx / 100 < cx) {

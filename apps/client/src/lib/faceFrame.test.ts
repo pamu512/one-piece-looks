@@ -23,7 +23,13 @@ import type { FaceBox } from "./face.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bandsJson = JSON.parse(readFileSync(join(here, "face-bands.json"), "utf8")) as {
-  train: { n: number }; test: { n: number; mouth_y: { p5: number; p95: number }; eye_y: { p5: number; p95: number } };
+  train: { n: number };
+  test: {
+    n: number;
+    mouth_y: { p5: number; p95: number };
+    eye_y: { mean: number };
+    brow_y: { mean: number };
+  };
 };
 
 test("WFLW band constants derive from the test split (2500 faces)", () => {
@@ -32,11 +38,24 @@ test("WFLW band constants derive from the test split (2500 faces)", () => {
   // Mouth band: p5 widened down by 0.04, p95 widened up by 0.03.
   assert.equal(MOUTH_BAND.y0, Math.floor((bandsJson.test.mouth_y.p5 - 0.04) * 100) / 100);
   assert.equal(MOUTH_BAND.y1, Math.ceil((bandsJson.test.mouth_y.p95 + 0.03) * 100) / 100);
-  assert.equal(EYE_BAND.y0, Math.floor((bandsJson.test.eye_y.p5 - 0.03) * 100) / 100);
-  assert.equal(EYE_BAND.y1, Math.ceil((bandsJson.test.eye_y.p95 + 0.03) * 100) / 100);
-  // WFLW reality check: mouth sits below eyes inside any face box.
+  // Eye band starts below the brow midline and ends near the iris, not at p5.
+  assert.equal(EYE_BAND.y0, Math.ceil((bandsJson.test.brow_y.mean + 0.05) * 100) / 100);
+  assert.equal(EYE_BAND.y1, Math.ceil((bandsJson.test.eye_y.mean + 0.10) * 100) / 100);
+  // WFLW reality check: mouth sits below eyes, and the brow is above the eye band.
   assert.ok(MOUTH_BAND.y0 > EYE_BAND.y1);
-  assert.ok(BROW_MID_Y < EYE_BAND.y0 + 0.1);
+  assert.ok(BROW_MID_Y < EYE_BAND.y0);
+});
+
+test("eyebrow-high centers fall outside the eye band", () => {
+  const fb: FaceBox = { x: 0.15, y: 0.1, w: 0.7, h: 0.75 };
+  const band = eyeBand(fb);
+  const browY = fb.y + fb.h * BROW_MID_Y;
+  const irisY = fb.y + fb.h * ((EYE_BAND.y0 + EYE_BAND.y1) / 2);
+  assert.ok(browY < band.y0, "brow midline is above the iris search");
+  assert.ok(irisY > band.y0 && irisY < band.y1, "iris height stays inside the band");
+  const rel = (y: number) => (y - fb.y) / fb.h;
+  assert.ok(rel(browY) < EYE_BAND.y0);
+  assert.ok(rel(irisY) >= EYE_BAND.y0 && rel(irisY) <= EYE_BAND.y1);
 });
 
 test("clampCenterInBand keeps the patch inside the band", () => {

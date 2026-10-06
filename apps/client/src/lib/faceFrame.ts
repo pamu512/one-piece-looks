@@ -17,8 +17,8 @@
  *
  * Band numbers come from apps/client/src/lib/face-bands.json (WFLW, 7500
  * train / 2500 test faces; regenerate with scripts/train/wflw-bands.py).
- * The constants below are the test-split p5/p95 values, widened slightly
- * toward box-interior margins to tolerate box jitter.
+ * Mouth uses test-split p5/p95, widened slightly. The eye band starts
+ * below the brow midline so a dark eyebrow cannot win the iris search.
  */
 
 import type { FaceBox } from "./face";
@@ -30,7 +30,7 @@ import type { FaceBox } from "./face";
  * constants fails the test instead of shipping drift.
  */
 const TEST_MOUTH_P5 = 0.6261, TEST_MOUTH_P95 = 0.849;
-const TEST_EYE_P5 = 0.2506, TEST_EYE_P95 = 0.494;
+const TEST_EYE_MEAN = 0.3788;
 const TEST_BROW_MEAN = 0.2885;
 
 /** Below this y (fraction of the full frame) is the known hand band. */
@@ -44,10 +44,16 @@ export const MOUTH_BAND = {
   x1: 0.82,
 } as const;
 
-/** Eye band inside any faceBox: WFLW eye_y p5..p95, margin-widened. */
+/**
+ * Eye band inside any faceBox. y0 sits below the WFLW brow midline
+ * (mean 0.2885 + 0.05, ceiled) so the search cannot lock onto the eyebrow.
+ * y1 stays just under the iris mean + 0.10, which still covers the pupil
+ * (test eye_y mean 0.3788) without reaching the nose.
+ * x is split per eye at the face midline in detectFace (not one shared peak).
+ */
 export const EYE_BAND = {
-  y0: Math.floor((TEST_EYE_P5 - 0.03) * 100) / 100, // 0.22
-  y1: Math.ceil((TEST_EYE_P95 + 0.03) * 100) / 100, // 0.53
+  y0: Math.ceil((TEST_BROW_MEAN + 0.05) * 100) / 100, // 0.34
+  y1: Math.ceil((TEST_EYE_MEAN + 0.10) * 100) / 100, // 0.48
   x0: 0.08,
   x1: 0.92,
 } as const;
