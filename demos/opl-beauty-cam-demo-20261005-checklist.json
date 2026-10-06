@@ -1,0 +1,192 @@
+{
+  "beats": {
+    "cameraOrFileFallback": true,
+    "zoneTapLock": true,
+    "panOrSkip": true,
+    "softCasualVisible": true,
+    "buildThreeLooks": true,
+    "horizontalLooksWithFaceImages": true,
+    "shuffle": true,
+    "notOldWizard": true
+  },
+  "frames": [
+    {
+      "t": "camera",
+      "body": "ONE PIECE LOOKS\n\nOne piece. Three looks.\n\nCamera unavailable\n\nChoose a photo\nTake the photo\nNo camera? Choose a photo\n\nPhotos go to the YouCam service for analysis. We don't keep them.",
+      "imgs": [],
+      "buttons": [
+        "Take the photo"
+      ]
+    },
+    {
+      "t": "zones",
+      "body": "Retake\n\nSTEP 1 OF 2\n\nLIP\nCHEEK\nEYE\nBROW\nLINER\n\nTap where you're wearing it. One tap reads the color and locks it.",
+      "imgs": [],
+      "buttons": [
+        "Retake",
+        "LIP",
+        "CHEEK",
+        "EYE",
+        "BROW",
+        "LINER"
+      ]
+    },
+    {
+      "t": "locked",
+      "body": "Retake\n\nSTEP 2 OF 2\n\nLocked\n\nWe're building from the color exactly as it sits on your face.\n\nPhotograph the pan\nSkip, use what is on my face\n\nDRESS THE MOMENT\n\nMOOD\n\nBitch mode\nBoss\nDemure\nOwning it\nSexy\nSoft\nClean\nMain character\n\nEVENT\n\nDinner date\nOffice\nCasual\nWorkout\nNight out\nWedding guest\nErrands\nInterview\nBuild my three looks",
+      "imgs": [],
+      "buttons": [
+        "Retake",
+        "Locked",
+        "Photograph the pan",
+        "Skip, use what is on my face",
+        "Bitch mode",
+        "Boss",
+        "Demure",
+        "Owning it",
+        "Sexy",
+        "Soft",
+        "Clean",
+        "Main character",
+        "Dinner date",
+        "Office",
+        "Casual",
+        "Workout",
+        "Night out",
+        "Wedding guest",
+        "Errands",
+        "Interview",
+        "Build my three looks"
+      ]
+    },
+    {
+      "t": "prebuild",
+      "body": "Retake\n\nSTEP 2 OF 2\n\nLocked\n\nWe're building from the color exactly as it sits on your face.\n\npan color set\nRe-shoot the pan\n\nDRESS THE MOMENT\n\nMOOD\n\nBitch mode\nBoss\nDemure\nOwning it\nSexy\nSoft\nClean\nMain character\n\nEVENT\n\nDinner date\nOffice\nCasual\nWorkout\nNight out\nWedding guest\nErrands\nInterview\nBuild my three looks",
+      "imgs": [],
+      "buttons": [
+        "Retake",
+        "Locked",
+        "Re-shoot the pan",
+        "Bitch mode",
+        "Boss",
+        "Demure",
+        "Owning it",
+        "Sexy",
+        "Soft",
+        "Clean",
+        "Main character",
+        "Dinner date",
+        "Office",
+        "Casual",
+        "Workout",
+        "Night out",
+        "Wedding guest",
+        "Errands",
+        "Interview",
+        "Build my three looks"
+      ]
+    },
+    {
+      "t": "looks",
+      "body": "YOUR THREE LOOKS\n\nBuilt around your lip\nLocked lip\nANCHOR\nAnchor\nSave\nLip · red - locked\nLIFT\nLift\nSave\nLip · red - locked\nLiner · soft\nSTATEMENT\nStatement\nSave\nLip · red - locked\nContour · sculpt\nCheek · fresh\nEye · soft\nLiner · soft\nBrow · defined\nLash · soft\nHighlight · glow\nShuffle\nStart over\n\nMOOD + EVENT\n\n6 renders left\nBitch mode\nBoss\nDemure\nOwning it\nSexy\nSoft\nClean\nMain character\nDinner date\nOffice\nCasual\nWorkout\nNight out\nWedding guest\nErrands\nInterview\n\nPhotos go to the YouCam service for analysis. We don't keep them.",
+      "imgs": [
+        {
+          "alt": "Anchor look on your face",
+          "w": 1000,
+          "h": 1250,
+          "srcKind": "svg-data"
+        },
+        {
+          "alt": "Lift look on your face",
+          "w": 1000,
+          "h": 1250,
+          "srcKind": "svg-data"
+        },
+        {
+          "alt": "Statement look on your face",
+          "w": 1000,
+          "h": 1250,
+          "srcKind": "svg-data"
+        }
+      ],
+      "buttons": [
+        "Locked lip",
+        "Save",
+        "Save",
+        "Save",
+        "Shuffle",
+        "Start over",
+        "Bitch mode",
+        "Boss",
+        "Demure",
+        "Owning it",
+        "Sexy",
+        "Soft",
+        "Clean",
+        "Main character",
+        "Dinner date",
+        "Office",
+        "Casual",
+        "Workout",
+        "Night out",
+        "Wedding guest",
+        "Errands",
+        "Interview"
+      ]
+    },
+    {
+      "t": "shuffled",
+      "body": "YOUR THREE LOOKS\n\nBuilt around your lip\nLocked lip\nANCHOR\nAnchor\nSave\nLip · red - locked\nLIFT\nLift\nSave\nLip · red - locked\nEye · soft wash\nSTATEMENT\nStatement\nSave\nLip · red - locked\nContour · sculpt\nCheek · fresh\nEye · soft\nLiner · soft\nBrow · defined\nLash · soft\nHighlight · glow\nShuffle\nStart over\n\nMOOD + EVENT\n\n3 renders left\nBitch mode\nBoss\nDemure\nOwning it\nSexy\nSoft\nClean\nMain character\nDinner date\nOffice\nCasual\nWorkout\nNight out\nWedding guest\nErrands\nInterview\n\nPhotos go to the YouCam service for analysis. We don't keep them.",
+      "imgs": [
+        {
+          "alt": "Anchor look on your face",
+          "w": 1000,
+          "h": 1250,
+          "srcKind": "svg-data"
+        },
+        {
+          "alt": "Lift look on your face",
+          "w": 1000,
+          "h": 1250,
+          "srcKind": "svg-data"
+        },
+        {
+          "alt": "Statement look on your face",
+          "w": 1000,
+          "h": 1250,
+          "srcKind": "svg-data"
+        }
+      ],
+      "buttons": [
+        "Locked lip",
+        "Save",
+        "Save",
+        "Save",
+        "Shuffle",
+        "Start over",
+        "Bitch mode",
+        "Boss",
+        "Demure",
+        "Owning it",
+        "Sexy",
+        "Soft",
+        "Clean",
+        "Main character",
+        "Dinner date",
+        "Office",
+        "Casual",
+        "Workout",
+        "Night out",
+        "Wedding guest",
+        "Errands",
+        "Interview"
+      ]
+    }
+  ],
+  "mp4": {
+    "path": "/Users/pamu/Projects/one-piece-looks/demos/opl-beauty-cam-demo-20261005.mp4",
+    "tmp": "/tmp/opl-beauty-cam-demo-20261005.mp4",
+    "bytes": 759971,
+    "durationSec": 69.08
+  }
+}
