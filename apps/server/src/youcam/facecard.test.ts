@@ -74,10 +74,12 @@ describe("faceCardSvg", () => {
     expect(svg.match(/<ellipse/g)?.length).toBeGreaterThan(0);
   });
 
-  it("blends lip/lash/brow layers with multiply and supports with soft-light", () => {
-    const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64, LM);
+  it("multiplies the lip and paints support in normal color", () => {
+    const svg = faceCardSvg("statement", EFFECTS, 7, FACE_B64, LM);
     expect(svg).toContain("mix-blend-mode:multiply");
-    expect(svg).toContain("mix-blend-mode:soft-light");
+    expect(svg).not.toContain("mix-blend-mode:soft-light");
+    expect(svg).toContain('fill="#b3122e"');
+    expect(svg).toContain('fill="#e8a0a0"');
   });
 
   it("landmark lip centroid lands inside the lip polygon region", () => {
@@ -91,6 +93,31 @@ describe("faceCardSvg", () => {
     expect(cx).toBeLessThan(600);
     expect(cy).toBeGreaterThan(800);
     expect(cy).toBeLessThan(950);
+  });
+
+  it("keeps the lock lip opacity identical on every role", () => {
+    const op = (role: string) => {
+      const svg = faceCardSvg(role, EFFECTS, 7, FACE_B64);
+      const m = svg.match(/fill="#b3122e" opacity="([0-9.]+)"/);
+      return m ? Number(m[1]) : NaN;
+    };
+    const anchor = op("anchor");
+    expect(anchor).toBeGreaterThan(0.9);
+    expect(op("lift")).toBe(anchor);
+    expect(op("statement")).toBe(anchor);
+  });
+
+  it("paints a higher colorIntensity stronger than a soft mood", () => {
+    const blush = (ci: number) => {
+      const svg = faceCardSvg("statement", [
+        { category: "blush", palettes: [{ color: "#e8a0a0", colorIntensity: ci }] },
+      ], 1, FACE_B64);
+      const m = svg.match(/fill="#e8a0a0" opacity="([0-9.]+)"/);
+      return m ? Number(m[1]) : NaN;
+    };
+    const soft = blush(40);
+    const night = blush(70);
+    expect(night).toBeGreaterThan(soft + 0.15);
   });
 
   it("statement supporting layers render stronger than lift for the same effects", () => {

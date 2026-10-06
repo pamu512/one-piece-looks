@@ -7,8 +7,10 @@
  * onto the session's face photo as an SVG: the photo as the base layer plus
  * zone-aligned color patches. When the client sends its detected face
  * landmarks (optional, additive), patches are clipped to the real lip/eye/
- * brow/cheek polygons and blended multiply / soft-light so the render reads
- * as makeup worn on the face, not stickers on a canvas.
+ * brow/cheek polygons. Lip, liner, lash, and brow multiply. Blush, shadow,
+ * contour, and highlight paint in normal color: soft-light against a close
+ * skin hex moves the photo by only a few levels, and phone video then
+ * compresses Anchor, Lift, and Statement into the same frame.
  *
  * The deliverable carries no burned-in text: role labels and any mode badges
  * live in UI chrome only (client), never inside the image bytes.
@@ -109,32 +111,72 @@ function esc(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+const SUPPORT_BASE: Record<string, number> = {
+  blush: 0.7,
+  eye_shadow: 0.48,
+  eye_liner: 0.78,
+  eyebrows: 0.7,
+  eyelashes: 0.74,
+  contour: 0.58,
+  highlighter: 0.46,
+};
+
 /**
- * Opacity for a category so layered effects stay soft and photo-backed.
- * Supporting layers are boosted so Soft x Casual still reads Lift/Statement
- * apart from Anchor on camera and in mock demos (especially on light skin).
+ * Builder colorIntensity for a supporting layer sits in a narrow band
+ * (Soft x Casual statement is about 60, Night out about 66). A linear map
+ * of that gap is invisible on camera, so the top of the band is stretched.
+ * 0 at the floor, about 1 at a full statement.
  */
-function catOpacity(c: string, colorIntensity: number | undefined): number {
-  const base: Record<string, number> = {
-    lip_color: 0.85,
-    blush: 0.48,
-    eye_shadow: 0.5,
-    eye_liner: 0.72,
-    eyebrows: 0.58,
-    eyelashes: 0.62,
-    contour: 0.3,
-    highlighter: 0.28,
-  };
-  const b = base[c] ?? 0.35;
-  if (colorIntensity === undefined) return b;
-  return Math.max(0.1, Math.min(0.92, b * (0.65 + (colorIntensity / 100) * 0.55)));
+function intensityStretch(colorIntensity: number | undefined): number {
+  if (colorIntensity === undefined) return 0.6;
+  const t = Math.max(0, Math.min(1.25, (colorIntensity - 30) / 40));
+  return t < 0.7 ? t : 0.7 + (t - 0.7) * 2.6;
 }
 
-/** Role scale for non-lock layers: Statement fullest, Lift mid, Anchor lip-only. */
-function roleLayerScale(role: string, category: string): number {
+/** Statement fullest, Lift mid, Anchor keeps support quiet (lip is separate). */
+function roleSupportGain(role: string): number {
+  if (role === "statement") return 1.08;
+  if (role === "lift") return 0.8;
+  return 0.42;
+}
+
+/**
+ * Lip opacity is the same on every role so the lock hex does not change
+ * strength. Support opacity tracks role and the stretched intensity.
+ */
+function layerOpacity(category: string, colorIntensity: number | undefined, role: string): number {
+  if (category === "lip_color") return 0.94;
+  const base = SUPPORT_BASE[category] ?? 0.55;
+  const s = intensityStretch(colorIntensity);
+  const raw = base * roleSupportGain(role) * (0.5 + s * 0.62);
+  // Lift's one or two supports have to read on camera even when the builder
+  // intensity is the Soft x Casual floor. Liner and lash stay under the cap
+  // so they do not paint out the iris.
+  const cap = category === "eye_liner" || category === "eyelashes" ? 0.7 : 0.96;
+  // Floors keep a single Lift support readable. They stay under the
+  // statement paint for the same effect, and under the cap, so a higher
+  // colorIntensity (Night out) still has room to get stronger.
+  const liftFloor = category === "eyebrows" || category === "eye_liner"
+    ? 0.8
+    : category === "blush"
+      ? 0.5
+      : category === "eye_shadow"
+        ? 0.58
+        : 0.48;
+  if (role === "lift") return Math.min(cap, Math.max(liftFloor, raw));
+  if (role === "statement") return Math.min(cap, Math.max(raw, liftFloor + 0.08));
+  return Math.min(cap, Math.max(0.22, raw));
+}
+
+/** How far a support zone grows past the landmark. Lip stays on the mouth. */
+function zoneGrow(category: string, colorIntensity: number | undefined, role: string): number {
   if (category === "lip_color") return 1;
-  if (role === "statement") return 1.55;
-  if (role === "lift") return 1.35;
+  const s = intensityStretch(colorIntensity);
+  const roleK = role === "statement" ? 1.2 : role === "lift" ? 1.05 : 0.9;
+  if (category === "blush") return roleK * (1.15 + s * 0.5);
+  if (category === "contour" || category === "highlighter") return roleK * (1.05 + s * 0.22);
+  if (category === "eye_shadow") return roleK * (1.05 + s * 0.2);
+  if (category === "eyebrows") return role === "lift" ? 1.65 : 1.15;
   return 1;
 }
 
@@ -185,8 +227,8 @@ function zonesFor(category: string, lm: FaceLandmarks | undefined): { ellipse: E
     }
     case "blush": {
       const out: { ellipse: Ellipse; clipPoly: FacePoly | null; kind: Zone["kind"] }[] = [];
-      if (lm?.cheekL && lm.cheekL.length >= 3) out.push({ ellipse: polyEllipse(lm.cheekL), clipPoly: lm.cheekL, kind: "patch" });
-      if (lm?.cheekR && lm.cheekR.length >= 3) out.push({ ellipse: polyEllipse(lm.cheekR), clipPoly: lm.cheekR, kind: "patch" });
+      if (lm?.cheekL && lm.cheekL.length >= 3) out.push({ ellipse: polyEllipse(lm.cheekL), clipPoly: null, kind: "patch" });
+      if (lm?.cheekR && lm.cheekR.length >= 3) out.push({ ellipse: polyEllipse(lm.cheekR), clipPoly: null, kind: "patch" });
       if (out.length > 0) return out;
       break;
     }
@@ -202,7 +244,9 @@ function zonesFor(category: string, lm: FaceLandmarks | undefined): { ellipse: E
           } else if (category === "eyelashes") {
             out.push({ ellipse: { cx: el.cx, cy: el.cy + el.ry * 0.45, rx: el.rx * 0.98, ry: Math.max(4, el.ry * 0.4) }, clipPoly: eye, kind: "lash" });
           } else {
-            out.push({ ellipse: { cx: el.cx, cy: el.cy - el.ry * 0.15, rx: el.rx * 1.04, ry: el.ry * 0.9 }, clipPoly: eye, kind: "patch" });
+            // Lid above the iris, unclipped. Clipping to the eye oval cuts a
+            // raised ellipse down to a sliver the camera cannot see.
+            out.push({ ellipse: { cx: el.cx, cy: el.cy - el.ry * 0.9, rx: el.rx * 1.35, ry: Math.max(8, el.ry * 0.72) }, clipPoly: null, kind: "patch" });
           }
         }
       }
@@ -215,7 +259,7 @@ function zonesFor(category: string, lm: FaceLandmarks | undefined): { ellipse: E
       const eyes: (FacePoly | undefined)[] = [lm?.eyeL, lm?.eyeR];
       for (let i = 0; i < 2; i++) {
         const b = brows[i];
-        if (b && b.length >= 3) out.push({ ellipse: polyEllipse(b), clipPoly: b, kind: "brow" });
+        if (b && b.length >= 3) out.push({ ellipse: polyEllipse(b), clipPoly: null, kind: "brow" });
         else if (eyes[i] && eyes[i]!.length >= 3) out.push({ ellipse: browFromEye(polyEllipse(eyes[i]!)), clipPoly: null, kind: "brow" });
       }
       if (out.length > 0) return out;
@@ -263,15 +307,28 @@ function categoryJitterSeed(seed: number, effects: VtoEffect[]): number {
 }
 
 const POLY_CACHE = new WeakMap<FacePoly, string>();
-function clipIdFor(poly: FacePoly, salt: string): { id: string; points: string } {
-  let points = POLY_CACHE.get(poly);
-  if (!points) {
-    points = poly
-      .map(([fx, fy]) => `${(fx * CANVAS_W).toFixed(1)},${(fy * CANVAS_H).toFixed(1)}`)
-      .join(" ");
-    POLY_CACHE.set(poly, points);
+function clipPoints(poly: FacePoly, grow: number): string {
+  if (grow === 1) {
+    let points = POLY_CACHE.get(poly);
+    if (!points) {
+      points = poly
+        .map(([fx, fy]) => `${(fx * CANVAS_W).toFixed(1)},${(fy * CANVAS_H).toFixed(1)}`)
+        .join(" ");
+      POLY_CACHE.set(poly, points);
+    }
+    return points;
   }
-  return { id: `clip-${salt}`, points };
+  let sx = 0, sy = 0;
+  for (const [fx, fy] of poly) { sx += fx; sy += fy; }
+  const n = Math.max(1, poly.length);
+  const cx = sx / n, cy = sy / n;
+  return poly
+    .map(([fx, fy]) => {
+      const x = cx + (fx - cx) * grow;
+      const y = cy + (fy - cy) * grow;
+      return `${(x * CANVAS_W).toFixed(1)},${(y * CANVAS_H).toFixed(1)}`;
+    })
+    .join(" ");
 }
 
 /**
@@ -290,9 +347,9 @@ export function faceCardSvg(
   const softLayers: string[] = [];
   const multLayers: string[] = [];
   const defs: string[] = [
-    `<filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="26"/></filter>`,
-    `<filter id="soft2" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10"/></filter>`,
-    `<filter id="soft3" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="5"/></filter>`,
+    `<filter id="soft" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="4.5"/></filter>`,
+    `<filter id="soft2" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="2"/></filter>`,
+    `<filter id="soft3" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="1.4"/></filter>`,
   ];
 
   // Deterministic micro-jitter so a shuffle render visibly moves soft layers
@@ -306,22 +363,35 @@ export function faceCardSvg(
     if (category === "skin_smooth") continue;
     const color = effectColor(e);
     if (!color) continue;
-    const opacity = Math.min(
-      0.92,
-      catOpacity(category, colorIntensityOf(e)) * roleLayerScale(role, category),
-    );
+    const ci = colorIntensityOf(e);
+    const opacity = layerOpacity(category, ci, role);
+    const grow = zoneGrow(category, ci, role);
     const multiply = category === "lip_color" || category === "eye_liner" || category === "eyelashes" || category === "eyebrows";
     const bucket = multiply ? multLayers : softLayers;
 
     for (const z of zonesFor(category, landmarks)) {
-      const { cx, cy, rx, ry } = z.ellipse;
+      const cx = z.ellipse.cx;
+      const cy = z.ellipse.cy;
+      // Landmark polys for cheek and brow are a few dozen pixels. Phone video
+      // compresses that away, so support ellipses have a minimum size on the
+      // 1000px canvas. The lip stays on its polygon.
+      const min: Record<string, readonly [number, number]> = {
+        blush: [108, 82],
+        eyebrows: [92, 30],
+        eye_shadow: [96, 38],
+        contour: [52, 150],
+      };
+      const floor = min[category];
+      const rx = Math.max(z.ellipse.rx * grow, floor?.[0] ?? 0);
+      const ry = Math.max(z.ellipse.ry * grow, floor?.[1] ?? 0);
       const blur = category === "lip_color" || category === "eye_liner" ? "soft3" : multiply ? "soft2" : "soft";
       const jx = jig * (multiply ? 4 : 9);
       let body: string;
       const el = `<ellipse cx="${(cx + jx).toFixed(1)}" cy="${cy.toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${esc(color)}" opacity="${opacity.toFixed(3)}" filter="url(#${blur})"/>`;
       if (z.clipPoly) {
         clipN += 1;
-        const { id, points } = clipIdFor(z.clipPoly, String(clipN));
+        const id = `clip-${clipN}`;
+        const points = clipPoints(z.clipPoly, grow);
         defs.push(`<clipPath id="${id}"><polygon points="${points}"/></clipPath>`);
         body = `<g clip-path="url(#${id})">${el}</g>`;
       } else {
@@ -336,7 +406,7 @@ export function faceCardSvg(
     ${defs.join("\n    ")}
   </defs>
   <image href="data:image/jpeg;base64,${facePhotoBase64}" x="0" y="0" width="${CANVAS_W}" height="${CANVAS_H}" preserveAspectRatio="xMidYMid slice"/>
-  <g style="mix-blend-mode:soft-light">
+  <g>
     ${softLayers.join("\n    ")}
   </g>
   <g style="mix-blend-mode:multiply">
