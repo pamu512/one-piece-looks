@@ -87,6 +87,7 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
   const lm: FaceLandmarks = {
     ...(box(r.faceBox) ? { faceBox: box(r.faceBox) } : {}),
     ...(poly(r.lip) ? { lip: poly(r.lip) } : {}),
+    ...(poly(r.lipInner) ? { lipInner: poly(r.lipInner) } : {}),
     ...(poly(r.eyeL) ? { eyeL: poly(r.eyeL) } : {}),
     ...(poly(r.eyeR) ? { eyeR: poly(r.eyeR) } : {}),
     ...(poly(r.browL) ? { browL: poly(r.browL) } : {}),

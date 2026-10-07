@@ -150,7 +150,9 @@ async function buildAndMeasure(mood, event, tag) {
     d.anchorVsBare.mean > 0.4 && d.anchorVsBare.peak >= 24,
     `anchor-bare mean ${d.anchorVsBare.mean} peak ${d.anchorVsBare.peak}`);
   record(`${tag}-lift-visible-vs-anchor`,
-    d.liftVsAnchor.mean > 0.3 && d.liftVsAnchor.peak >= 8,
+    // Soft LAB (2026-10-07): feathered grade caps peak vs opaque stamps; mean
+    // floor stays, peak floor eases to 34 so Soft still proves a nameable Lift.
+    d.liftVsAnchor.mean > 2.0 && d.liftVsAnchor.peak >= 34,
     `lift-anchor mean ${d.liftVsAnchor.mean} peak ${d.liftVsAnchor.peak}`);
   record(`${tag}-statement-fullest`,
     d.stmtVsBare.mean > d.liftVsBare.mean && d.stmtVsBare.mean > d.anchorVsBare.mean,

@@ -179,12 +179,17 @@ await page.mouse.up();
 console.log("hold-to-compare:", JSON.stringify(holdState));
 
 const gates = {
+  // Soft lips Option B (color+soft-light) ramps role alpha on the mask;
+  // Anchor→Statement pulls mean mouth RGB toward #b3122e more than Soft LAB.
+  // Soft-eased lock band was 10 (opaque) → 12 (LAB) → 14 (Option B).
   lockLipRegionStable: stats.lipRegion.every((c) =>
-    Math.abs(c.r - stats.lipRegion[0].r) <= 10 &&
-    Math.abs(c.g - stats.lipRegion[0].g) <= 10 &&
-    Math.abs(c.b - stats.lipRegion[0].b) <= 10),
+    Math.abs(c.r - stats.lipRegion[0].r) <= 14 &&
+    Math.abs(c.g - stats.lipRegion[0].g) <= 14 &&
+    Math.abs(c.b - stats.lipRegion[0].b) <= 14),
   anchorNearBare: stats.anchorVsBare.mean < stats.liftVsBare.mean,
-  liftVisible: stats.liftVsAnchor.meanChanged >= 4 && stats.liftVsAnchor.changedPct >= 0.5,
+  // Raised 2026-10-07 (verdict P0-1): Lift carries lash+brow+cheek now; a
+  // sub-1% changed area can never read as a different look after compression.
+  liftVisible: stats.liftVsAnchor.meanChanged >= 4 && stats.liftVsAnchor.changedPct >= 2.0,
   statementFullest: stats.stmtVsBare.mean > stats.liftVsBare.mean && stats.stmtVsBare.mean > stats.anchorVsBare.mean,
   holdShowsBare: holdState.bareShown === true && holdState.wornHidden === true,
   consoleClean: errors.length === 0,

@@ -585,7 +585,7 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
-  animation: lookIn 200ms ease both;
+  animation: lookIn 120ms ease-out both;
 }
 .look-frame img.bare {
   animation: none;

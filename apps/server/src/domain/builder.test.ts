@@ -94,6 +94,19 @@ describe("builder: structure invariants", () => {
     expect(categories.filter((c) => c !== "skin_smooth" && c !== "lip_color")).toHaveLength(0);
   });
 
+  it("lift is the nameable step: lash definition + brow + cheekbone blush (P0-1)", () => {
+    // Verdict 2026-10-07: Anchor->Lift must change nameable features, not
+    // opacity nudges. Every lock category keeps the trio minus the locked
+    // zone itself.
+    for (const category of ["lip", "cheek", "eye", "brow", "liner"] as const) {
+      const lift = buildLooks({ ...base, lock: { ...base.lock, category } })[1]!;
+      const cats = lift.effects.map((e) => String(e.category));
+      expect(cats).toContain("eyelashes");
+      if (category !== "brow") expect(cats).toContain("eyebrows");
+      if (category !== "cheek") expect(cats).toContain("blush");
+    }
+  });
+
   it("statement has the full set: contour + lashes + at least 4 layers", () => {
     const st = looks[2]!;
     const cats = st.effects.map((e) => String(e.category));
@@ -108,10 +121,10 @@ describe("builder: structure invariants", () => {
     for (const category of ["lip", "cheek", "eye", "brow", "liner"] as const) {
       for (const look of buildLooks({ ...base, lock: { ...base.lock, category } })) {
         const brow = effectOf(look.effects, "eyebrows");
-        // 2026-10-05: statement ALWAYS adds brows, and a brow lock must render
-        // its locked effect. A missing eyebrows effect here is a regression
-        // (category "brow" 400s at create on live YouCam), not a skip.
-        if (look.role !== "statement" && category !== "brow") continue;
+        // Lift and statement always carry a brow (P0-1). Anchor only when
+        // the lock itself is the brow. A missing eyebrows effect 400s at
+        // create on live YouCam.
+        if (look.role === "anchor" && category !== "brow") continue;
         expect(brow).toBeDefined();
         const pattern = brow.pattern as { type: string; name: string; curvature: number; thickness: number; definition: number };
         expect(pattern.type).toBe("shape");

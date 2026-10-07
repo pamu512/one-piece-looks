@@ -25,6 +25,7 @@
 
 import {
   BROW_MID_Y, clampCenterInBand, decideFaceBox, EYE_BAND, MOUTH_BAND, eyeBand, mouthBand,
+  selectLipPolygon,
 } from "./faceFrame";
 import { detectFaceFrameModel } from "./faceModel";
 
@@ -253,32 +254,33 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
     clampCenterInBand(eyeR[1], eye.y0, eye.y1, eyeRy),
   ];
 
-  // --- lips: redness peak inside the WFLW mouth band of faceBox ---
+  // Lips: redness mass inside the mouth band (half-res, same window the
+  // alignment probe scores), not a fixed ellipse on a coarse patch mean.
   const mouth = mouthBand(faceBox);
-  let lip: [number, number] = [
-    fx0 + fw * 0.5,
-    fy0 + fh * MOUTH_FALLBACK_Y,
-  ];
-  {
-    let bestScore = -Infinity;
-    const y0 = Math.max(1, Math.floor(mouth.y0 * 100)), y1 = Math.min(98, Math.floor(mouth.y1 * 100));
-    for (let gy = y0; gy <= y1; gy += 2) {
-      for (let gx = Math.floor(mouth.x0 * 100); gx <= Math.floor(mouth.x1 * 100); gx += 2) {
-        const [r, g, bb] = patchMean(ctx, gx / 100, gy / 100, 3);
-        const score = (r - Math.max(g, bb)) - Math.abs(g - bb) * 0.25;
-        if (score > bestScore) { bestScore = score; lip = [gx / 100, gy / 100]; }
-      }
-    }
-  }
-
   const lipR = { rx: fw * 0.11, ry: Math.max(fh * 0.035, 0.02) };
-  const lipCx = clampCenterInBand(lip[0], mouth.x0, mouth.x1, lipR.rx);
-  const lipCy = clampCenterInBand(lip[1], mouth.y0, mouth.y1, lipR.ry);
+  const lipFallback = polyFromBox(
+    clampCenterInBand(fx0 + fw * 0.5, mouth.x0, mouth.x1, lipR.rx),
+    clampCenterInBand(fy0 + fh * MOUTH_FALLBACK_Y, mouth.y0, mouth.y1, lipR.ry),
+    lipR.rx,
+    lipR.ry,
+    12,
+  );
+  let lip: Poly = lipFallback;
+  try {
+    const data = ctx.getImageData(0, 0, NORMAL_W, NORMAL_H).data;
+    lip = selectLipPolygon(NORMAL_W, NORMAL_H, faceBox, (x, y) => {
+      const i = (y * NORMAL_W + x) * 4;
+      const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
+      return (r - Math.max(g, b)) - Math.abs(g - b) * 0.25;
+    }) ?? lipFallback;
+  } catch {
+    lip = lipFallback;
+  }
   const browY = fy0 + fh * BROW_MID_Y;
 
   return {
     faceBox,
-    lip: polyFromBox(lipCx, lipCy, lipR.rx, lipR.ry, 10),
+    lip,
     eyeL: polyFromBox(eyeL[0], eyeL[1], eyeR2, eyeR2 * 0.62, 8),
     eyeR: polyFromBox(eyeR[0], eyeR[1], eyeR2, eyeR2 * 0.62, 8),
     browL: polyFromBox(eyeL[0], (eyeL[1] + browY) / 2, eyeR2 * 1.15, eyeR2 * 0.32, 8),
@@ -295,6 +297,30 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
 export async function detectFaceWithModel(canvas: HTMLCanvasElement): Promise<FaceLandmarks | null> {
   const model = await detectFaceFrameModel(canvas).catch(() => null);
   return detectFace(canvas, model);
+}
+
+/**
+ * Landmarks for the JPEG the server actually paints. Scoring the pre-encode
+ * canvas lets a one-pixel redness peak jump off the mouth after q=0.92.
+ */
+export function detectFaceOnEncodedPhoto(
+  jpegUrl: string,
+  fallback: HTMLCanvasElement,
+): Promise<FaceLandmarks | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = fallback.width || NORMAL_W;
+      c.height = fallback.height || NORMAL_H;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      if (!ctx) { void detectFaceWithModel(fallback).then(resolve); return; }
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      void detectFaceWithModel(c).then(resolve);
+    };
+    img.onerror = () => { void detectFaceWithModel(fallback).then(resolve); };
+    img.src = jpegUrl;
+  });
 }
 
 /**

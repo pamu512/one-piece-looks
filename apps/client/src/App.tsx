@@ -5,9 +5,10 @@ import {
   type Mood, type SessionInfo, type Tone,
 } from "./lib/types";
 import {
-  detectFaceWithModel, normalizeTo45, suggestLock, type FaceLandmarks,
+  detectFaceOnEncodedPhoto, normalizeTo45, suggestLock, type FaceLandmarks,
 } from "./lib/face";
 import { composeShareCard, downloadBlob, shareLooksPng } from "./lib/share";
+import { warmDecode } from "./lib/warmDecode";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
@@ -165,6 +166,7 @@ export default function App() {
       }
       setStage("looks"); setPhase("building");
       const res = await api.postLooks(session.sessionId, m, e);
+      await warmDecode(res.looks.map((l) => l.imageUrl));
       setLooks(res); setBuiltPair({ mood: m, event: e });
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "The looks didn't build.";
@@ -177,6 +179,7 @@ export default function App() {
     setBusy(true); setError(null);
     try {
       const res = await api.postShuffle(session.sessionId);
+      await warmDecode(res.looks.map((l) => l.imageUrl));
       setLooks(res);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Shuffle didn't land.";
@@ -252,7 +255,7 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
     img.onload = () => {
       const c = normalizeTo45(img);
       const dataUrl = c.toDataURL("image/jpeg", 0.92);
-      void detectFaceWithModel(c).then((lm) => onPhoto(dataUrl, lm));
+      void detectFaceOnEncodedPhoto(dataUrl, c).then((lm) => onPhoto(dataUrl, lm));
     };
     img.onerror = () => onPhoto(src, null);
     img.src = src;
@@ -270,7 +273,8 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
     const img = new Image();
     img.onload = () => {
       const c = normalizeTo45(img);
-      void detectFaceWithModel(c).then((lm) => onPhoto(c.toDataURL("image/jpeg", 0.92), lm));
+      const dataUrl = c.toDataURL("image/jpeg", 0.92);
+      void detectFaceOnEncodedPhoto(dataUrl, c).then((lm) => onPhoto(dataUrl, lm));
     };
     img.onerror = () => onPhoto(src, null);
     img.src = src;
@@ -559,7 +563,9 @@ function LooksStage({
   const goto = (i: number) => {
     const el = stripRef.current;
     if (!el) return;
-    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    // Direct navigation (thumbs, dots) snaps: the user asked for that look,
+    // not a ride to it. Physical swipes keep their native momentum.
+    el.scrollTo({ left: i * el.clientWidth, behavior: "auto" });
   };
 
   const startHold = () => { holdTimer.current = setTimeout(() => setBare(true), 260); };

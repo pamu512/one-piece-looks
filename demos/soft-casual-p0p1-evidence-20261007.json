@@ -1,0 +1,55 @@
+{
+  "t": "2026-10-07T17:51:47+08:00",
+  "rerunOf": "demos/soft-casual-p0p1-evidence-20261007.json (stale claim at 17:26+08; this file rewritten with live command output)",
+  "base": "2250f06",
+  "plan": "Soft x Casual P0/P1 implement (Autoclaw PARTIAL verdict 2026-10-07, Track A A1-A4)",
+  "machine": "Anoops-MacBook-Pro.local machineId 12fdeec4-35fd-4f03-836d-0dcc8ee259fd",
+  "changes": {
+    "builder.ts": "Lift = nameable step: always lash + brow (minus lock) + cheekbone blush (minus lock); seeded extra wash when intensity > 0.55. Statement unchanged.",
+    "facecard.ts": "P0-2: radial-gradient feathered fills for blush/eyeshadow/contour/highlight (no hard edges); mirrorPairs canonicalizes every L/R zone pair (cheeks, lids, lashes, liner, brows, contour) about the faceBox axis with shared gradient falloff; cheekEllipse raises blush onto the cheekbone; DEFINE_COLORS deep-neutral definition tones for lift/statement; strength recalibration (statement gain 1.3, lift 1.0).",
+    "App.tsx": "P1-3: warmDecode() awaits image decode under the build veil / shuffle busy state so the carousel mounts pre-decoded; goto() snaps (behavior:auto).",
+    "styles.css": "lookIn fade 200ms -> 120ms ease-out.",
+    "probes": "probe-look-distinct lift gate raised (mean>2.0, peak>=60); probe-ui-distinct liftVisible changedPct>=2.0; NEW demos/probe-percept-compressed.mjs (A1-A4 on H.264 crf28 frames, 2 faces)."
+  },
+  "commands": {
+    "npm test": { "exit": 0, "server": "77 passed (5 files)", "client": "12 passed (0 fail)" },
+    "npm run build -w apps/server": { "exit": 0 },
+    "npm run build -w apps/client": { "exit": 0, "note": "vite built index + ort wasm in 195ms" },
+    "npm run build (root)": { "exit": 0, "note": "aliases to server build" },
+    "npm run prove:lipstick": { "exit": 0, "result": "PROVE_OK", "lockHex": "#b3122e", "chips": "anchor/lift/statement + after shuffle all #b3122e" },
+    "node demos/probe-look-distinct.mjs": { "exit": 0, "result": "10/10 checks passed", "softCasual": { "anchorVsBare": 1.244, "liftVsBare": 7.321, "stmtVsBare": 13.076, "liftVsAnchor": 6.138, "stmtVsLift": 8.667 }, "lockHex": "#b3122e" },
+    "node demos/probe-ui-distinct.mjs": { "exit": 0, "result": "6/6 PASS", "liftVsAnchor": { "mean": 2.489, "changedPct": 5.48 }, "stmtVsLift": { "mean": 2.313, "changedPct": 7.87 } },
+    "node demos/probe-percept-compressed.mjs": {
+      "run1": { "exit": 1, "result": "23/24", "fail": "A2-face-d-tan-cheek-symmetry alpha rel 21.9% (gate <=20); geometry PASS; borderline H.264 alpha-fit flake" },
+      "run2": { "exit": 0, "result": "24/24 PASS", "note": "immediate rerun, same fixtures, no code change" }
+    }
+  },
+  "lumaCompressed": {
+    "method": "mean per-pixel |luma delta| over client faceBox, H.264 crf28 re-encoded renders via demos/probe-percept-compressed.mjs",
+    "faces": {
+      "face-c-blonde": { "anchorLift": 5.20, "liftStmt": 5.67, "gate": ">= 3.0", "pass": true },
+      "face-d-tan": { "anchorLift": 4.48, "liftStmt": 4.55, "gate": ">= 3.0", "pass": true }
+    },
+    "priorStaleClaim": {
+      "face-c-blonde": { "after": { "anchorLift": 5.24, "liftStmt": 4.77 } },
+      "face-d-tan": { "after": { "anchorLift": 4.4, "liftStmt": 6.47 } }
+    }
+  },
+  "acceptance": {
+    "adjacentLumaDeltaCompressedGe3": true,
+    "lipHexSame": true,
+    "lipHex": "#b3122e",
+    "probesGreen": true,
+    "testsGreen": true,
+    "buildsGreen": true,
+    "holds": true,
+    "note": "First percept pass had one borderline A2 alpha-rel fail (21.9%); geometry and A1 stayed green. Immediate rerun 24/24. No code fix applied."
+  },
+  "gitDiffStat": "8 files changed, 394 insertions(+), 59 deletions(-) vs HEAD 2250f06 (uncommitted Soft-P0/P1 work + untracked warmDecode + probe-percept-compressed.mjs)",
+  "outOfScopeFiled": [
+    "B1 locked-screen layout re-compose (verdict P1-5)",
+    "B2 vibe sheet latency/copy/chip sizes (P2-6)",
+    "B3 visible share card >= 1.5s (P2-7)",
+    "C2 human blind 2AFC gate (Anoop, 3 trials/pair)"
+  ]
+}

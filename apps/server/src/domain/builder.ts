@@ -460,21 +460,30 @@ export function buildLook(input: BuildInput, role: LookRole): BuiltLook {
     effects.unshift(skinSmooth(18));
   } else if (role === "lift") {
     effects.unshift(skinSmooth(35));
-    const candidates: Category[] = (["cheek", "brow", "liner", "eye"] as Category[]).filter(not);
-    const chosen = candidates
-      .sort(() => rng() - 0.5)
-      .slice(0, i > 0.55 ? 2 : 1);
-    for (const c of chosen) {
-      if (c === "cheek") {
-        effects.push(blushEffect(pick(rng, blushPool(vibe.cheek)), pal.cheek, i * 0.8, oily));
-        chip("Cheek", vibe.cheek, pal.cheek);
-      } else if (c === "brow") {
-        effects.push(browEffect(BROW_BY_TEMP[tone.temperature], pal.brow, i * 0.7));
-        chip("Brow", "soft definition", pal.brow);
-      } else if (c === "liner") {
+    // The nameable step (verdict P0-1, 2026-10-07): lash + brow definition
+    // and a blush raised onto the cheekbone. A viewer can verbalize "eyes
+    // opened up, cheeks lifted" - not just an opacity nudge. The locked
+    // category is never doubled; seeded variety lives in the extra wash.
+    if (not("brow")) {
+      effects.push(browEffect(BROW_BY_TEMP[tone.temperature], pal.brow, i * 0.7));
+      chip("Brow", "soft definition", pal.brow);
+      adds.push("brow");
+    }
+    effects.push(lashEffect(pick(rng, LASH_POOLS[vibe.eye]), "#1a1010", i * 0.85));
+    chip("Lash", `${vibe.eye} definition`, "#1a1010");
+    adds.push("eye");
+    if (not("cheek")) {
+      effects.push(blushEffect(pick(rng, blushPool(vibe.cheek)), pal.cheek, Math.max(i * 0.9, 0.34), oily));
+      chip("Cheek", vibe.cheek, pal.cheek);
+      adds.push("cheek");
+    }
+    const extras: Category[] = (["liner", "eye"] as Category[]).filter(not);
+    if (i > 0.55 && extras.length > 0) {
+      const c = extras[Math.floor(rng() * extras.length)]!;
+      if (c === "liner") {
         effects.push(linerEffect(pick(rng, LINER_POOLS[vibe.eye]), pal.liner, i * 0.8));
         chip("Liner", vibe.eye, pal.liner);
-      } else if (c === "eye") {
+      } else {
         effects.push(shadowEffect(pick(rng, SHADOW_POOLS[vibe.eye]), [pal.eye, pal.eyeLight], i * 0.7));
         chip("Eye", `${vibe.eye} wash`, pal.eye);
       }
