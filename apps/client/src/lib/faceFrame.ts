@@ -350,7 +350,11 @@ export function selectLipPolygon(
   }
   const pts: [number, number][] = mask.pts.length > 0 ? mask.pts : [[phx * sx + sx / 2, phy * sy + sy / 2]];
   const hull = convexHull(pts);
-  const shape = hull.length >= 3 ? hull : boxEllipse(pts);
+  // v3b: the corner lift that lipMassOutline applies to its rings must also
+  // cover this fallback hull - a 4-7 corner hull is the same blocky outline
+  // and callers require >= 8 outline points. Midpoints stay on the hull edges,
+  // so the shape (and area) does not grow: no skirt, no halo.
+  const shape = hull.length >= 3 ? (hull.length < 8 ? liftCornerCount(hull) : hull) : boxEllipse(pts);
   return shape.map(([x, y]) => [x / width, y / height]);
 }
 
@@ -841,11 +845,14 @@ function lipMassOutline(
   const edge = traceCellEdges(mass, w, h);
   if (!edge || edge.length < 4) return null;
   const nudged = nudgeOutline(edge, mass, w, h);
-  // Under 8 corners is the blocky hull. The cell edge is the vermillion.
-  const fitted = nudged && nudged.length >= 8 ? null : fitMassRing(edge, mass, w, h);
+  // v3b: a sub-8 nudged ring is still the best outline so far - keep it as a
+  // candidate instead of discarding it, and always compute the fitted ring too.
+  const fitted = fitMassRing(edge, mass, w, h);
   let ring: [number, number][] | null =
     nudged && nudged.length >= 8 ? nudged :
     fitted && fitted.length >= 8 ? fitted :
+    nudged && nudged.length >= 3 ? nudged :
+    fitted && fitted.length >= 3 ? fitted :
     null;
   if (!ring && edge.length >= 8) {
     const holds = (r: readonly [number, number][]) => massHolds(r, mass, w, h);
@@ -859,7 +866,7 @@ function lipMassOutline(
     }
   }
   if (!ring) ring = nudged ?? fitted;
-  if (ring && ring.length >= 3 && ring.length < 8) ring = liftCornerCount(ring);
+  if (ring && ring.length >= 3 && ring.length < 8) ring = liftCornerCount(ring);  // v3b: now reachable for 4-7 corner rings
   if (!ring || ring.length < 3) return null;
   if (!(ringArea(ring) > cells.length * 0.2)) return null;
   return ring.map(([x, y]) => [(x + x0) * sx, (y + y0) * sy]);
