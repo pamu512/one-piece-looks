@@ -20,7 +20,8 @@
  *
  * detectFace() stays synchronous and dependency-free; the optional model
  * path is detectFaceWithModel(), an async wrapper with the same output
- * shape (FaceLandmarks), so App.tsx can await it and fall back cleanly.
+ * shape (FaceLandmarks). It awaits YOLO, then BiSeNet lip parsing.
+ * Capture awaits that promise. A parse failure keeps the redness lip.
  */
 
 import {
@@ -28,6 +29,7 @@ import {
   selectLipPolygon,
 } from "./faceFrame";
 import { detectFaceFrameModel } from "./faceModel";
+import { lipsOrHeuristic, meanLipFleshLab, parseLips } from "./faceParse";
 
 /** WFLW eye band midpoint (test split): fallback eye height inside faceBox. */
 const EYE_FALLBACK_Y = (EYE_BAND.y0 + EYE_BAND.y1) / 2;
@@ -43,6 +45,14 @@ export type Poly = ReadonlyArray<readonly [number, number]>;
 export interface FaceLandmarks {
   faceBox: FaceBox;
   lip: Poly;
+  /** Mouth opening. Omitted when the mouth is closed or the parser has no class-11 gap. */
+  lipInner?: Poly | undefined;
+  /** Mean CIE L* of the lip flesh. The mouth hole is not included. */
+  lipMeanL?: number | undefined;
+  /** Mean CIE a* of the lip flesh, -128..127. The mouth hole is not included. */
+  lipMeanA?: number | undefined;
+  /** Mean CIE b* of the lip flesh, -128..127. The mouth hole is not included. */
+  lipMeanB?: number | undefined;
   eyeL: Poly;
   eyeR: Poly;
   browL: Poly;
@@ -266,6 +276,9 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
     12,
   );
   let lip: Poly = lipFallback;
+  let lipMeanL: number | undefined;
+  let lipMeanA: number | undefined;
+  let lipMeanB: number | undefined;
   try {
     const data = ctx.getImageData(0, 0, NORMAL_W, NORMAL_H).data;
     lip = selectLipPolygon(NORMAL_W, NORMAL_H, faceBox, (x, y) => {
@@ -273,6 +286,17 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
       const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
       return (r - Math.max(g, b)) - Math.abs(g - b) * 0.25;
     }) ?? lipFallback;
+    const rgbAt = (x: number, y: number): [number, number, number] => {
+      const i = (y * NORMAL_W + x) * 4;
+      return [data[i] ?? 0, data[i + 1] ?? 0, data[i + 2] ?? 0];
+    };
+    // No class-11 hole on the heuristic lip, and the card paints that case solid.
+    const mean = meanLipFleshLab(NORMAL_W, NORMAL_H, rgbAt, lip, undefined);
+    if (mean !== null) {
+      lipMeanL = mean.L;
+      lipMeanA = mean.a;
+      lipMeanB = mean.b;
+    }
   } catch {
     lip = lipFallback;
   }
@@ -281,6 +305,9 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
   return {
     faceBox,
     lip,
+    ...(lipMeanL !== undefined ? { lipMeanL } : {}),
+    ...(lipMeanA !== undefined ? { lipMeanA } : {}),
+    ...(lipMeanB !== undefined ? { lipMeanB } : {}),
     eyeL: polyFromBox(eyeL[0], eyeL[1], eyeR2, eyeR2 * 0.62, 8),
     eyeR: polyFromBox(eyeR[0], eyeR[1], eyeR2, eyeR2 * 0.62, 8),
     browL: polyFromBox(eyeL[0], (eyeL[1] + browY) / 2, eyeR2 * 1.15, eyeR2 * 0.32, 8),
@@ -291,12 +318,16 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
 }
 
 /**
- * Async model path: ONNX faceBox when available, heuristic otherwise.
- * Same output shape as detectFace; never rejects (model errors fall back).
+ * Async model path. Awaits the YOLO box, then the BiSeNet lip parse.
+ * Heuristic lips (and their lip means) stay only when the parser fails
+ * to load, throws, or returns an implausible lip area. Never rejects.
  */
 export async function detectFaceWithModel(canvas: HTMLCanvasElement): Promise<FaceLandmarks | null> {
   const model = await detectFaceFrameModel(canvas).catch(() => null);
-  return detectFace(canvas, model);
+  const base = detectFace(canvas, model);
+  if (!base || !model) return base;
+  const parsed = await parseLips(canvas, model.box).catch(() => null);
+  return lipsOrHeuristic(base, parsed);
 }
 
 /**

@@ -135,6 +135,13 @@ export interface FaceAnalysisRequest {
   landmarks?: {
     faceBox?: { x: number; y: number; w: number; h: number };
     lip?: [number, number][];
+    lipInner?: [number, number][];
+    /** CIE L* of the lip flesh, 0..100. Values outside that range are dropped. */
+    lipMeanL?: number;
+    /** CIE a* of the lip flesh, -128..127. Values outside that range are dropped. */
+    lipMeanA?: number;
+    /** CIE b* of the lip flesh, -128..127. Values outside that range are dropped. */
+    lipMeanB?: number;
     eyeL?: [number, number][];
     eyeR?: [number, number][];
     browL?: [number, number][];

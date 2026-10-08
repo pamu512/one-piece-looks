@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import {
   applyLipComposite,
+  applyLipMeanShift,
+  applyLipTexture,
   applySoftLab,
   faceCardDataUrl,
   faceCardSvg,
@@ -14,6 +16,8 @@ import {
   labMatrixText,
   labToSrgb,
   lipMaskAlpha,
+  lipMeanShiftDelta,
+  lipPaintEdge,
   lipVermillionEdge,
   LIP_COLOR_KEEP,
   LIP_DEPTH,
@@ -110,15 +114,16 @@ describe("faceCardSvg", () => {
     expect(svg).not.toContain("<text");
   });
 
-  it("paints the lip as an evenodd ring and never an ellipse", () => {
+  it("paints a closed lip as one fill and never an ellipse", () => {
     const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64, LM);
-    expect(svg).toContain('fill-rule="evenodd"');
+    expect(svg).not.toContain('fill-rule="evenodd"');
+    expect(svg).not.toContain('data-hole=');
     expect(svg).not.toContain("<ellipse");
     expect(svg).not.toContain("<clipPath");
     const lip = svg.match(/data-zone="lip_color"[^>]*d="([^"]+)"/);
     expect(lip).not.toBeNull();
     const subs = lip![1]!.split(" Z").filter((s) => s.includes("M"));
-    expect(subs.length).toBeGreaterThanOrEqual(2);
+    expect(subs).toHaveLength(1);
   });
 
   it("falls back to shelf paths without landmarks", () => {
@@ -126,7 +131,7 @@ describe("faceCardSvg", () => {
     expect(svg).not.toContain("<clipPath");
     expect(svg).not.toContain("<ellipse");
     expect(svg).toContain("<path");
-    expect(svg).toContain('data-hole="fissure"');
+    expect(svg).not.toContain("data-hole=");
   });
 
   it("grades lips with the sRGB color/soft-light stage and keeps the veil multiply", () => {
@@ -143,7 +148,7 @@ describe("faceCardSvg", () => {
     // the lip mask itself is white geometry (blend reads alpha, not color)
     const lipPath = svg.match(/data-zone="lip_color"[^>]*>/)![0]!;
     expect(lipPath).toContain('fill="#ffffff"');
-    expect(lipPath).toContain('fill-rule="evenodd"');
+    expect(lipPath).not.toContain('fill-rule="evenodd"');
   });
 
   it("paints the lip fill on the landmark polygon, not a jittered ellipse", () => {
@@ -166,7 +171,7 @@ describe("faceCardSvg", () => {
     expect(cy).toBeLessThan(950);
   });
 
-  it("clips the lip ramp to the vermillion instead of an outward 0.06 skirt", () => {
+  it("erodes the lip 1 to 2 px and feathers 1 to 3 px without clipping to the hard outline", () => {
     const svg = faceCardSvg("statement", EFFECTS, 7, FACE_B64, LM);
     const support = oddFeatherKernel(interEyePx(LM), 0.06);
     const morph = svg.match(/<feMorphology in="lpsh" operator="erode" radius="(\d+)" result="lper"\/>/);
@@ -176,20 +181,54 @@ describe("faceCardSvg", () => {
     const radius = Number(morph![1]);
     const sigma = Number(blur![1]);
     expect(radius).toBeGreaterThanOrEqual(1);
-    expect(radius).toBeLessThanOrEqual(4);
+    expect(radius).toBeLessThanOrEqual(2);
+    expect(sigma).toBeGreaterThanOrEqual(1);
+    expect(sigma).toBeLessThanOrEqual(3);
     expect(radius).toBeLessThan(support);
     expect(sigma).toBeLessThan(featherSigma(support));
-    expect(svg).toContain('<feComposite in="lpbl" in2="lpsh" operator="in" result="lpcl"/>');
-    expect(svg).not.toContain('operator="dilate"');
+    expect(svg).not.toContain('<feComposite in="lpbl" in2="lpsh" operator="in" result="lpcl"/>');
+    expect(svg).toContain('<feOffset in="lpbl" dx="0" dy="0" result="lpcl"/>');
+    expect(svg).not.toContain("lphd");
+    expect(svg).not.toMatch(/<feMorphology in="lpsh"[^>]*operator="dilate"/);
     expect(svg).toContain('mode="color"');
     expect(svg).toContain('mode="soft-light"');
     const lip = zonePaths(svg, "lip_color")[0];
     expect(lip).toBeTruthy();
     expect(svg).toContain(`data-kernel="${radius}"`);
-    const edge = lipVermillionEdge(interEyePx(LM), lip!.ry);
+    const edge = lipPaintEdge(LM);
     expect(radius).toBe(edge.radius);
     expect(sigma).toBeCloseTo(edge.sigma, 3);
+    expect(blur![1]).toBe(edge.sigmaText);
+    const lipTag = svg.match(/data-zone="lip_color"[^>]*>/)![0]!;
+    expect(attr(lipTag, "data-sigma")).toBe(edge.sigmaText);
+    expect(attr(lipTag, "data-sigma")).toBe(blur![1]);
     expect(lipVermillionEdge(Number.NaN, Number.NaN).radius).toBeGreaterThanOrEqual(1);
+    expect(lipVermillionEdge(Number.NaN, Number.NaN).radius).toBeLessThanOrEqual(2);
+  });
+
+  it("feather sigma uses the unrounded ry, so 37.49 stays 1.687", () => {
+    const bare = lipVermillionEdge(240, 37.49);
+    expect(bare.sigmaText).toBe(Math.min(3, Math.max(1, 37.49 * 0.045)).toFixed(3));
+    expect(bare.sigmaText).toBe("1.687");
+    expect(bare.sigma).toBeCloseTo(1.687, 3);
+    const fromDataRy = lipVermillionEdge(240, Number((37.49).toFixed(1)));
+    expect(fromDataRy.sigmaText).toBe("1.688");
+    const y0 = 850 / 1250;
+    const y1 = (850 + 74.98) / 1250;
+    const lm: FaceLandmarks = {
+      ...LM,
+      lip: [[0.42, y0], [0.58, y0], [0.58, y1], [0.42, y1]],
+    };
+    const edge = lipPaintEdge(lm);
+    const svg = faceCardSvg("statement", EFFECTS, 7, FACE_B64, lm);
+    const blur = svg.match(/<feGaussianBlur in="lper" stdDeviation="([0-9.]+)" result="lpbl"\/>/);
+    const lipTag = svg.match(/data-zone="lip_color"[^>]*>/)![0]!;
+    expect(blur).not.toBeNull();
+    expect(blur![1]).toBe(edge.sigmaText);
+    expect(attr(lipTag, "data-sigma")).toBe(edge.sigmaText);
+    expect(Number(blur![1])).toBeCloseTo(edge.sigma, 3);
+    expect(edge.sigmaText).toBe("1.687");
+    expect(lipVermillionEdge(interEyePx(lm), Number(attr(lipTag, "data-ry"))).sigmaText).toBe("1.688");
   });
 
   it("feathers blush toward the cheekbone and keeps shadow on a thin lid shelf", () => {
@@ -369,7 +408,7 @@ describe("faceCardSvg", () => {
     expect(b!.ry).toBeLessThanOrEqual(6);
   });
 
-  it("prefers a supplied inner lip ring over the fissure", () => {
+  it("cuts a hole only when lipInner is present", () => {
     const lm: FaceLandmarks = {
       ...LM,
       lipInner: [[0.48, 0.70], [0.52, 0.70], [0.52, 0.72], [0.48, 0.72]],
@@ -387,9 +426,29 @@ describe("faceCardSvg", () => {
   it("rejects an inner ring that would stamp the outer lip", () => {
     const lm: FaceLandmarks = { ...LM, lipInner: LM.lip };
     const svg = faceCardSvg("statement", EFFECTS, 1, FACE_B64, lm);
-    expect(svg).toContain('data-hole="fissure"');
-    expect(svg).toContain('fill-rule="evenodd"');
+    expect(svg).not.toContain("data-hole=");
+    expect(svg).not.toContain('fill-rule="evenodd"');
     expect(svg).not.toContain("<ellipse");
+  });
+
+  it("keeps a thin wide inner gap inside the lip", () => {
+    const ring = (rx: number, ry: number, n: number): [number, number][] => {
+      const pts: [number, number][] = [];
+      for (let i = 0; i < n; i++) {
+        const t = (i / n) * Math.PI * 2;
+        pts.push([0.5 + Math.cos(t) * rx, 0.7 + Math.sin(t) * ry]);
+      }
+      return pts;
+    };
+    // Inner rx is 0.956 of the outer, which ellipse-ratio checks reject at 0.92.
+    const svg = faceCardSvg("anchor", EFFECTS, 1, FACE_B64, {
+      ...LM,
+      lip: ring(0.09, 0.035, 24),
+      lipInner: ring(0.086, 0.008, 18),
+    });
+    expect(svg).toContain('data-hole="inner"');
+    expect(svg).toContain('fill-rule="evenodd"');
+    expect(svg).toContain('<feComposite in="lpbl" in2="lphd" operator="out" result="lpcl"/>');
   });
 });
 
@@ -423,6 +482,146 @@ describe("lip composite", () => {
     expect(anchor).toBeGreaterThan(0.2);
     expect(lift).toBeGreaterThan(anchor);
     expect(statement).toBeGreaterThan(lift);
+  });
+
+  it("shifts lip L toward #b3122e, keeps per-pixel variance, and ranks statement above lift above anchor", () => {
+    const lipstick: [number, number, number] = [179, 18, 46];
+    const samples: Array<[number, number, number]> = [
+      [220, 160, 150],
+      [190, 120, 110],
+      [235, 175, 165],
+      [160, 90, 80],
+    ];
+    const targetL = srgbToLab(lipstick[0], lipstick[1], lipstick[2]).L;
+    const plain = samples.map((px) => srgbToLab(...applyLipTexture(px, lipstick, 1, undefined, "statement")).L);
+    const plainMean = plain.reduce((a, b) => a + b, 0) / plain.length;
+    const plainVar = plain.reduce((a, b) => a + (b - plainMean) ** 2, 0) / plain.length;
+    const lipMeanL = plainMean;
+    const stats = (role: string) => {
+      const Ls = samples.map((px) => srgbToLab(...applyLipTexture(px, lipstick, 1, lipMeanL, role)).L);
+      const mean = Ls.reduce((a, b) => a + b, 0) / Ls.length;
+      const variance = Ls.reduce((a, b) => a + (b - mean) ** 2, 0) / Ls.length;
+      return { mean, variance };
+    };
+    const anchor = stats("anchor");
+    const lift = stats("lift");
+    const statement = stats("statement");
+    expect(Math.abs(anchor.mean - targetL)).toBeLessThan(Math.abs(plainMean - targetL));
+    expect(Math.abs(lift.mean - targetL)).toBeLessThan(Math.abs(anchor.mean - targetL));
+    expect(Math.abs(statement.mean - targetL)).toBeLessThan(Math.abs(lift.mean - targetL));
+    expect(statement.variance).toBeGreaterThan(plainVar * 0.8);
+    expect(applyLipTexture(samples[0]!, lipstick, 0, lipMeanL, "statement")).toEqual(
+      applyLipComposite(samples[0]!, lipstick, 0),
+    );
+    const svg = (role: string) => faceCardSvg(role, EFFECTS, 7, FACE_B64, { ...LM, lipMeanL: 72 });
+    const bias = (role: string) => {
+      const m = svg(role).match(/1\.000000 0\.000000 0\.000000 0\.000000 (-?[0-9.]+) 0\.000000 1\.000000/);
+      expect(m).not.toBeNull();
+      return Number(m![1]);
+    };
+    expect(svg("statement")).toContain('data-shift="0.60"');
+    expect(svg("lift")).toContain('data-shift="0.55"');
+    expect(svg("anchor")).toContain('data-shift="0.50"');
+    expect(svg("statement")).toContain('data-lmean="72.00"');
+    expect(Math.abs(bias("statement"))).toBeGreaterThan(Math.abs(bias("lift")));
+    expect(Math.abs(bias("lift"))).toBeGreaterThan(Math.abs(bias("anchor")));
+    expect(faceCardSvg("statement", EFFECTS, 7, FACE_B64, LM)).not.toContain("data-lmean=");
+  });
+
+  it("shifts fair and tan lips toward #b3122e in one LAB pass and keeps L texture", () => {
+    const lipstick: [number, number, number] = [179, 18, 46];
+    const target = srgbToLab(lipstick[0], lipstick[1], lipstick[2]);
+    const hue = (lab: { a: number; b: number }) => Math.atan2(lab.b, lab.a) * 180 / Math.PI;
+    const hueDelta = (a: number, b: number) => {
+      const d = Math.abs(a - b) % 360;
+      return d > 180 ? 360 - d : d;
+    };
+    // CIE76. The filter shift is affine in encoded LAB, then read back in Lab.
+    const de76 = (p: { L: number; a: number; b: number }, q: { L: number; a: number; b: number }) =>
+      Math.hypot(p.L - q.L, p.a - q.a, p.b - q.b);
+    const std = (xs: number[]) => {
+      const m = xs.reduce((a, b) => a + b, 0) / xs.length;
+      return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length);
+    };
+    const around = (rgb: [number, number, number]): Array<[number, number, number]> => {
+      const base = srgbToLab(rgb[0], rgb[1], rgb[2]);
+      return [-15, -7.5, 0, 7.5, 15].map((dL) => labToSrgb({ L: base.L + dL, a: base.a, b: base.b }));
+    };
+    const paint = (samples: Array<[number, number, number]>, role: string) => {
+      const labs = samples.map((px) => srgbToLab(px[0], px[1], px[2]));
+      const means = {
+        L: labs.reduce((a, b) => a + b.L, 0) / labs.length,
+        a: labs.reduce((a, b) => a + b.a, 0) / labs.length,
+        b: labs.reduce((a, b) => a + b.b, 0) / labs.length,
+      };
+      const out = samples.map((px) => srgbToLab(...applyLipMeanShift(px, lipstick, 1, means, role)));
+      const mean = {
+        L: out.reduce((a, b) => a + b.L, 0) / out.length,
+        a: out.reduce((a, b) => a + b.a, 0) / out.length,
+        b: out.reduce((a, b) => a + b.b, 0) / out.length,
+      };
+      return {
+        mean,
+        deTarget: de76(mean, target),
+        deBare: de76(mean, means),
+        lStdIn: std(labs.map((l) => l.L)),
+        lStdOut: std(out.map((l) => l.L)),
+        hue: hue(mean),
+      };
+    };
+    for (const rgb of [[205, 125, 120], [165, 95, 85]] as Array<[number, number, number]>) {
+      const statement = paint(around(rgb), "statement");
+      expect(statement.deTarget).toBeLessThanOrEqual(8);
+      expect(hueDelta(statement.hue, hue(target))).toBeLessThanOrEqual(10);
+      expect(statement.lStdOut).toBeGreaterThanOrEqual(statement.lStdIn * 0.7);
+      const anchor = paint(around(rgb), "anchor");
+      const lift = paint(around(rgb), "lift");
+      expect(anchor.deBare).toBeLessThan(lift.deBare);
+      expect(lift.deBare).toBeLessThan(statement.deBare);
+    }
+    const fair = around([205, 125, 120]);
+    const fairLabs = fair.map((px) => srgbToLab(px[0], px[1], px[2]));
+    const means = {
+      L: fairLabs.reduce((a, b) => a + b.L, 0) / fairLabs.length,
+      a: fairLabs.reduce((a, b) => a + b.a, 0) / fairLabs.length,
+      b: fairLabs.reduce((a, b) => a + b.b, 0) / fairLabs.length,
+    };
+    expect(applyLipMeanShift(fair[0]!, lipstick, 0, means, "statement")).toEqual(fair[0]);
+    const delta = lipMeanShiftDelta(lipstick, means, 1);
+    expect(delta).not.toBeNull();
+    const targetLab = srgbToLab(lipstick[0], lipstick[1], lipstick[2]);
+    expect(delta!.dL * 100).toBeCloseTo(targetLab.L - means.L, 5);
+    expect(delta!.dA * 255).toBeCloseTo(targetLab.a - means.a, 5);
+    expect(delta!.dB * 255).toBeCloseTo(targetLab.b - means.b, 5);
+    const partial = { L: means.L, a: Number.NaN, b: means.b };
+    const mask = lipMaskAlpha(1, zoneAlpha("lip_color", 80, "statement"));
+    expect(applyLipMeanShift(fair[0]!, lipstick, 1, partial, "statement")).toEqual(
+      applyLipTexture(fair[0]!, lipstick, mask, means.L, "statement"),
+    );
+    const onlyL = faceCardSvg("statement", EFFECTS, 7, FACE_B64, { ...LM, lipMeanL: 70, lipMeanA: 40 });
+    expect(onlyL).toContain('mode="color"');
+    expect(onlyL).toContain('data-shift="0.60"');
+    expect(onlyL).toContain('data-lmean="70.00"');
+    expect(onlyL).not.toContain("data-amean=");
+    const badA = faceCardSvg("statement", EFFECTS, 7, FACE_B64, {
+      ...LM, lipMeanL: 70, lipMeanA: 400, lipMeanB: 10,
+    });
+    expect(badA).toContain('mode="color"');
+    expect(badA).not.toContain('data-shift="1.00"');
+    const card = faceCardSvg("statement", EFFECTS, 7, FACE_B64, { ...LM, lipMeanL: means.L, lipMeanA: means.a, lipMeanB: means.b });
+    expect(card).toContain('data-shift="1.00"');
+    expect(card).toContain(`data-amean="${means.a.toFixed(2)}"`);
+    expect(card).toContain(`data-bmean="${means.b.toFixed(2)}"`);
+    expect(card).toContain(delta!.dL.toFixed(6));
+    expect(card).toContain(delta!.dA.toFixed(6));
+    expect(card).toContain(delta!.dB.toFixed(6));
+    expect(card).not.toContain('mode="color"');
+    expect(card).not.toContain('mode="soft-light"');
+    const alpha = (role: string) => zonePaths(faceCardSvg(role, EFFECTS, 7, FACE_B64, {
+      ...LM, lipMeanL: means.L, lipMeanA: means.a, lipMeanB: means.b,
+    }), "lip_color")[0]!.alpha;
+    expect(alpha("anchor")).toBeLessThan(alpha("lift"));
+    expect(alpha("lift")).toBeLessThan(alpha("statement"));
   });
 });
 

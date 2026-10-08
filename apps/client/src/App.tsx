@@ -7,6 +7,8 @@ import {
 import {
   detectFaceOnEncodedPhoto, normalizeTo45, suggestLock, type FaceLandmarks,
 } from "./lib/face";
+import { loadFaceFrameSession } from "./lib/faceModel";
+import { loadFaceParseSession } from "./lib/faceParse";
 import { composeShareCard, downloadBlob, shareLooksPng } from "./lib/share";
 import { warmDecode } from "./lib/warmDecode";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
@@ -121,6 +123,10 @@ export default function App() {
       ? {
           faceBox: landmarks.faceBox,
           lip: landmarks.lip as [number, number][],
+          ...(landmarks.lipInner ? { lipInner: landmarks.lipInner as [number, number][] } : {}),
+          ...(typeof landmarks.lipMeanL === "number" && Number.isFinite(landmarks.lipMeanL) ? { lipMeanL: landmarks.lipMeanL } : {}),
+          ...(typeof landmarks.lipMeanA === "number" && Number.isFinite(landmarks.lipMeanA) ? { lipMeanA: landmarks.lipMeanA } : {}),
+          ...(typeof landmarks.lipMeanB === "number" && Number.isFinite(landmarks.lipMeanB) ? { lipMeanB: landmarks.lipMeanB } : {}),
           eyeL: landmarks.eyeL as [number, number][],
           eyeR: landmarks.eyeR as [number, number][],
           browL: landmarks.browL as [number, number][],
@@ -246,7 +252,12 @@ export default function App() {
 function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks | null) => void }) {
   const cam = useCamera();
 
-  useEffect(() => { void cam.start(); return () => cam.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    void loadFaceFrameSession();
+    void loadFaceParseSession();
+    void cam.start();
+    return () => cam.stop();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const process = useCallback((src: string) => {
     // Normalize to the shared 4:5 frame, detect once (model when its runtime

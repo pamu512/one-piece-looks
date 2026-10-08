@@ -2,17 +2,18 @@
  * Face compositor for mock mode: paints the VTO effect list onto the
  * session face photo.
  *
- * Soft lips + LAB support (lip-mass mask, 2026-10-07):
+ * Soft lips + LAB support (lip-mass mask, 2026-10-08):
  *
- * Lips are their own sRGB stage after the LAB support layers. Coverage
- * is the client redness outline (lip flesh) minus a mouth hole (evenodd).
- * The edge is an inward ramp: erode, a short blur, then clip back to the
- * outline so color is 0 outside the vermillion. feBlend mode="color"
- * takes hue and saturation from the product hex and luminosity from the
- * camera lip (SVG form of Banuba matt.frag). A small soft-light pass
- * (Banuba softlight.glsl / W3C feBlend) adds vermillion depth without
- * flattening that luminosity into a stamp. Anchor / Lift / Statement
- * scale mask alpha only. Support layers still use the 0.06 face feather.
+ * Lips are their own stage after the LAB support layers. Coverage is
+ * the client lip outline (parsing contour, or the redness fallback).
+ * A class-11 lipInner is an evenodd hole, dilated after the blur so
+ * the feather cannot paint teeth. No lipInner means no hole. The edge
+ * is a 1 to 2 px erode and a 1 to 3 px blur that is not clipped back
+ * to the hard outline. When lipMeanL/A/B are all present, one
+ * encoded-LAB affine shifts the camera pixel so the lip mean moves
+ * toward the product hex and per-pixel deviations stay. Role alpha
+ * ramps Anchor, Lift, Statement. Missing means keep the color blend
+ * and soft-light pass. Support layers still use the 0.06 face feather.
  *
  * Support layers (blush / brows / lashes / liner / shadow / veil) keep
  * the Soft LAB grade: landmark polygons, a face-scaled Gaussian mask,
@@ -41,8 +42,14 @@ export interface FaceBox {
 export interface FaceLandmarks {
   readonly faceBox?: FaceBox | undefined;
   readonly lip?: FacePoly | undefined;
-  /** Inner mouth ring. When absent, a slit is cut so teeth are not filled. */
+  /** Class-11 mouth ring. When absent, the lip is painted with no hole. */
   readonly lipInner?: FacePoly | undefined;
+  /** CIE L* of the lip flesh, 0..100. Mouth hole excluded. */
+  readonly lipMeanL?: number | undefined;
+  /** CIE a* of the lip flesh, -128..127. Mouth hole excluded. */
+  readonly lipMeanA?: number | undefined;
+  /** CIE b* of the lip flesh, -128..127. Mouth hole excluded. */
+  readonly lipMeanB?: number | undefined;
   readonly eyeL?: FacePoly | undefined;
   readonly eyeR?: FacePoly | undefined;
   readonly browL?: FacePoly | undefined;
@@ -61,8 +68,8 @@ interface Ellipse {
 interface Stamp {
   points: Array<[number, number]>;
   hole?: Array<[number, number]> | undefined;
-  /** inner = supplied lipInner; fissure = derived mouth hole. */
-  holeKind?: "inner" | "fissure" | undefined;
+  /** inner = supplied lipInner that sits inside the outer lip. */
+  holeKind?: "inner" | undefined;
   cx: number;
   cy: number;
   rx: number;
@@ -212,8 +219,7 @@ export function zoneAlpha(category: string, colorIntensity: number | undefined, 
 /** How far L moves toward the product. Shadow stays at 0.10. Lips skip this grade. */
 export function zoneLightness(category: string): number {
   switch (category) {
-    // lip_color never reaches the LAB lerp; the lip runs its own sRGB
-    // color/soft-light stage (see lipStage). Value kept for API shape.
+    // lip_color never reaches the support LAB lerp. See lipStage.
     case "lip_color": return 0;
     case "eye_shadow": return 0.1;
     case "blush": return 0.2;
@@ -567,6 +573,129 @@ export function applyLipComposite(
   return [0, 1, 2].map((i) => lipByte(cb[i]! * (1 - m) + mixed[i]! * m)) as [number, number, number];
 }
 
+/** L shift weight. Statement 0.60, Lift 0.55, Anchor 0.50. */
+export function lipShiftK(role: string): number {
+  if (role === "statement") return 0.6;
+  if (role === "lift") return 0.55;
+  return 0.5;
+}
+
+function shiftEncodedL(rgb: readonly [number, number, number], deltaL: number): [number, number, number] {
+  if (deltaL === 0) return [rgb[0], rgb[1], rgb[2]];
+  const enc = encodeUnits(rgb);
+  const moved: [number, number, number] = [
+    clamp01(enc[0] + deltaL / 100),
+    enc[1],
+    enc[2],
+  ];
+  const dec = decodeUnits(moved);
+  return [dec[0] * 255, dec[1] * 255, dec[2] * 255];
+}
+
+/**
+ * Lip pixel the SVG filter paints: color blend + soft-light, then
+ * L' = L + k*(targetL - lipMeanL) on the painted pixel. mask 0 is the
+ * unpainted camera pixel (the mouth hole). k comes from lipShiftK(role).
+ */
+export function applyLipTexture(
+  base: readonly [number, number, number],
+  lipstick: readonly [number, number, number],
+  mask: number,
+  lipMeanL: number | undefined,
+  role: string,
+  depth = LIP_DEPTH,
+): [number, number, number] {
+  const m = clamp01(mask);
+  const orig = applyLipComposite(base, lipstick, 0, depth);
+  if (m === 0) return orig;
+  const painted = applyLipComposite(base, lipstick, 1, depth);
+  const k = lipShiftK(role);
+  const targetL = srgbToLab(lipstick[0] ?? 0, lipstick[1] ?? 0, lipstick[2] ?? 0).L;
+  const delta = typeof lipMeanL === "number" && Number.isFinite(lipMeanL) && Number.isFinite(targetL)
+    ? k * (targetL - lipMeanL)
+    : 0;
+  const shifted = delta === 0 ? painted : shiftEncodedL(painted, delta);
+  return [0, 1, 2].map((i) => Math.round(orig[i]! * (1 - m) + shifted[i]! * m)) as [number, number, number];
+}
+
+/** Statement mean-shift weight. Role separation is the mask alpha, not this k. */
+export const LIP_MEAN_SHIFT_K = 1;
+
+export interface LipMeans {
+  L: number;
+  a: number;
+  b: number;
+}
+
+function lipChannel(n: number | undefined, lo: number, hi: number): n is number {
+  return typeof n === "number" && Number.isFinite(n) && n >= lo && n <= hi;
+}
+
+/** False can still be a LipMeans with a usable L, so this stays a boolean. */
+export function lipMeansOk(means: LipMeans | undefined): boolean {
+  return !!means && lipChannel(means.L, 0, 100) && lipChannel(means.a, -128, 127) && lipChannel(means.b, -128, 127);
+}
+
+/**
+ * Encoded-LAB offsets for one mean-shift: R is L/100, G is (a+128)/255,
+ * B is (b+128)/255. Same addition the feColorMatrix applies.
+ */
+export function lipMeanShiftDelta(
+  lipstick: readonly [number, number, number],
+  means: LipMeans,
+  k = LIP_MEAN_SHIFT_K,
+): { dL: number; dA: number; dB: number } | null {
+  if (!lipMeansOk(means) || !Number.isFinite(k)) return null;
+  if (![lipstick[0], lipstick[1], lipstick[2]].every((c) => Number.isFinite(c))) return null;
+  const target = srgbToLab(lipstick[0] ?? 0, lipstick[1] ?? 0, lipstick[2] ?? 0);
+  if (![target.L, target.a, target.b].every(Number.isFinite)) return null;
+  return {
+    dL: k * (target.L - means.L) / 100,
+    dA: k * (target.a - means.a) / 255,
+    dB: k * (target.b - means.b) / 255,
+  };
+}
+
+function rgbByte(c: number): number {
+  if (!Number.isFinite(c)) return 0;
+  return Math.round(Math.min(255, Math.max(0, c)));
+}
+
+/**
+ * JS mirror of the mean-shift lip stage. One encode, an affine in
+ * encoded LAB, one decode, then lerp by the SVG mask
+ * (coverage^gamma * role alpha). If a or b is missing, a valid L
+ * still uses the color/soft-light L shift. colorIntensity defaults
+ * to 80, the lock card's lip intensity.
+ */
+export function applyLipMeanShift(
+  base: readonly [number, number, number],
+  lipstick: readonly [number, number, number],
+  coverage: number,
+  means: LipMeans | undefined,
+  role: string,
+  colorIntensity = 80,
+): [number, number, number] {
+  const orig: [number, number, number] = [rgbByte(base[0] ?? 0), rgbByte(base[1] ?? 0), rgbByte(base[2] ?? 0)];
+  const m = lipMaskAlpha(coverage, zoneAlpha("lip_color", colorIntensity, role));
+  if (!lipMeansOk(means)) {
+    const lOnly = means !== undefined && lipChannel(means.L, 0, 100) ? means.L : undefined;
+    return applyLipTexture(orig, lipstick, m, lOnly, role);
+  }
+  if (m === 0) return orig;
+  const delta = lipMeanShiftDelta(lipstick, means as LipMeans, LIP_MEAN_SHIFT_K);
+  if (!delta) return applyLipTexture(orig, lipstick, m, (means as LipMeans).L, role);
+  const enc = encodeUnits(orig);
+  const moved: [number, number, number] = [
+    clamp01(enc[0] + delta.dL),
+    clamp01(enc[1] + delta.dA),
+    clamp01(enc[2] + delta.dB),
+  ];
+  const dec = decodeUnits(moved);
+  const shifted: [number, number, number] = [dec[0] * 255, dec[1] * 255, dec[2] * 255];
+  return [0, 1, 2].map((i) => Math.round(orig[i]! * (1 - m) + shifted[i]! * m)) as [number, number, number];
+}
+
 /** Blurred coverage after the skirt gamma and the role alpha ramp. */
 export function lipMaskAlpha(coverage: number, roleAlpha: number): number {
   const c = clamp01(coverage);
@@ -688,42 +817,73 @@ function smoothClosed(poly: ReadonlyArray<readonly [number, number]>, perSeg = 6
   return out.length >= 3 ? out : poly.map(([x, y]) => [x, y]);
 }
 
-/**
- * ponytail: no lipInner means the opening is the outer polygon scaled
- * toward its centroid (thin in y, so the fill stays vermillion instead of
- * a thick ring). A real lipInner replaces it when that ring sits inside
- * the outer lip. Ceiling: a wide-open mouth can still tint teeth until
- * the client sends lipInner.
- */
-export const LIP_HOLE_SX = 0.62;
-export const LIP_HOLE_SY = 0.1;
-
-function mouthFissure(outer: ReadonlyArray<readonly [number, number]>): Array<[number, number]> {
-  const [cx, cy] = centroid(outer);
-  const b = ellipseOf(outer);
-  const sy = Math.min(0.16, Math.max(LIP_HOLE_SY, 1.2 / Math.max(b.ry, 1)));
-  return outer.map(([x, y]) => [cx + (x - cx) * LIP_HOLE_SX, cy + (y - cy) * sy]);
+function pointInPoly(x: number, y: number, poly: ReadonlyArray<readonly [number, number]>): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const pi = poly[i], pj = poly[j];
+    if (!pi || !pj) continue;
+    if ((pi[1] > y) === (pj[1] > y)) continue;
+    const xHit = ((pj[0] - pi[0]) * (y - pi[1])) / (pj[1] - pi[1]) + pi[0];
+    if (x < xHit) inside = !inside;
+  }
+  return inside;
 }
 
-/** An inner ring that nearly matches the outer lip paints a thick stamp. */
+function polyArea(pts: ReadonlyArray<readonly [number, number]>): number {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const p = pts[i]!, q = pts[(i + 1) % n]!;
+    a += p[0] * q[1] - q[0] * p[1];
+  }
+  return Math.abs(a) * 0.5;
+}
+
+function distToSeg(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const dx = bx - ax, dy = by - ay;
+  const l2 = dx * dx + dy * dy;
+  if (l2 === 0) return Math.hypot(px - ax, py - ay);
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/**
+ * A thin curved mouth gap is inside the lip when its area is a fraction
+ * of the outer lip and its vertices sit in the outer polygon. Ellipse
+ * rx/ry ratios reject that gap when the opening is almost as wide as
+ * the vermillion. An inner ring that copies the outer lip still fails
+ * the area cap, so it cannot stamp the whole mouth.
+ */
+function contained(x: number, y: number, outer: ReadonlyArray<readonly [number, number]>): boolean {
+  if (pointInPoly(x, y, outer)) return true;
+  for (let i = 0; i < outer.length; i++) {
+    const a = outer[i]!, b = outer[(i + 1) % outer.length]!;
+    if (distToSeg(x, y, a[0], a[1], b[0], b[1]) <= 1.5) return true;
+  }
+  return false;
+}
+
 function holeInside(
   outer: ReadonlyArray<readonly [number, number]>,
   hole: ReadonlyArray<readonly [number, number]>,
 ): boolean {
-  const o = ellipseOf(outer);
-  const h = ellipseOf(hole);
-  if (!(o.rx > 1 && o.ry > 1) || !(h.rx > 0.5 && h.ry > 0.5)) return false;
-  return h.rx <= o.rx * 0.92 && h.ry <= o.ry * 0.75
-    && Math.abs(h.cx - o.cx) <= o.rx * 0.45
-    && Math.abs(h.cy - o.cy) <= o.ry * 0.45;
+  if (outer.length < 3 || hole.length < 3) return false;
+  const oa = polyArea(outer);
+  const ha = polyArea(hole);
+  if (!(oa > 1) || !(ha > 0.5) || ha >= oa * 0.55) return false;
+  const [cx, cy] = centroid(hole);
+  if (!contained(cx, cy, outer)) return false;
+  let inside = 0;
+  for (const [x, y] of hole) if (contained(x, y, outer)) inside += 1;
+  return inside >= hole.length * 0.85;
 }
 
+/** A class-11 ring inside the lip. No ring, or a ring that fails the area test, means no hole. */
 function lipHole(
   outer: Array<[number, number]>,
   inner: Array<[number, number]> | undefined,
-): { pts: Array<[number, number]>; kind: "inner" | "fissure" } {
+): { pts: Array<[number, number]>; kind: "inner" } | null {
   if (inner && inner.length >= 3 && holeInside(outer, inner)) return { pts: inner, kind: "inner" };
-  return { pts: mouthFissure(outer), kind: "fissure" };
+  return null;
 }
 
 function refit(s: Stamp, to: Ellipse): Stamp {
@@ -838,8 +998,7 @@ function lipFallback(): Stamp {
     pts.push([cx + Math.cos(t) * rx, cy + Math.sin(t) * ry * bow]);
   }
   const smooth = smoothClosed(pts, 3);
-  const hole = lipHole(smooth, undefined);
-  return stampFrom(smooth, hole.pts, hole.kind);
+  return stampFrom(smooth);
 }
 
 function floorStamp(s: Stamp, minRx: number, minRy: number): Stamp {
@@ -880,7 +1039,7 @@ function stampsFor(category: string, lm: FaceLandmarks | undefined): Stamp[] {
         const outer = toCanvas(lip);
         const inner = usablePoly(lm?.lipInner) ? toCanvas(lm!.lipInner!) : undefined;
         const hole = lipHole(outer, inner);
-        return [stampFrom(outer, hole.pts, hole.kind)];
+        return [hole ? stampFrom(outer, hole.pts, hole.kind) : stampFrom(outer)];
       }
       break;
     }
@@ -1004,12 +1163,24 @@ interface Job {
 /** Lip-only job: the coverage mask + sRGB blend parameters. */
 interface LipJob {
   paint: string;
-  /** Mask alpha (role ramp; the only knob Anchor/Lift/Statement turn). */
+  /** Mask alpha (role ramp). Anchor < Lift < Statement. */
   alpha: number;
-  /** Feather stdDeviation in user units. */
+  /** Feather stdDeviation in user units. Not the erode radius. */
   sigma: number;
+  /** Same 3-decimal string as stdDeviation and data-sigma. */
+  sigmaText: string;
   kernel: number;
   stamps: Stamp[];
+  shiftK: number;
+  /** Encoded-LAB offsets. a/b stay 0 on the color-blend fallback. */
+  dL: number;
+  dA: number;
+  dB: number;
+  /** All three means present: one affine, no color blend. */
+  meanShift: boolean;
+  lipMeanL: number | null;
+  lipMeanA: number | null;
+  lipMeanB: number | null;
 }
 
 function jobSvg(job: Job, id: string): string {
@@ -1057,9 +1228,13 @@ function lipMaskSvg(job: LipJob, id: string): string {
       `data-rx="${s.rx.toFixed(1)}"`,
       `data-ry="${s.ry.toFixed(1)}"`,
       `data-kernel="${job.kernel}"`,
-      `data-sigma="${job.sigma.toFixed(3)}"`,
+      `data-sigma="${job.sigmaText}"`,
       `data-alpha="${job.alpha.toFixed(4)}"`,
       `data-tint="${job.paint}"`,
+      `data-shift="${job.shiftK.toFixed(2)}"`,
+      job.lipMeanL === null ? "" : `data-lmean="${job.lipMeanL.toFixed(2)}"`,
+      job.lipMeanA === null ? "" : `data-amean="${job.lipMeanA.toFixed(2)}"`,
+      job.lipMeanB === null ? "" : `data-bmean="${job.lipMeanB.toFixed(2)}"`,
       s.holeKind ? `data-hole="${s.holeKind}"` : "",
       `fill="#ffffff"`,
       s.hole ? `fill-rule="evenodd"` : "",
@@ -1067,6 +1242,21 @@ function lipMaskSvg(job: LipJob, id: string): string {
     return `<path ${attrs} d="${pathD(s.points, s.hole)}"/>`;
   }).join("");
   return `<svg id="${id}" xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">${paths}</svg>`;
+}
+
+/** Hole-only mask. Dilated after the feather so the blur cannot paint the gap. */
+function lipHoleSvg(job: LipJob, id: string): string {
+  const paths = job.stamps.map((s) => {
+    if (!s.hole || s.hole.length < 3) return "";
+    return `<path fill="#ffffff" d="${pathD(s.hole)}"/>`;
+  }).join("");
+  return `<svg id="${id}" xmlns="http://www.w3.org/2000/svg" width="${CANVAS_W}" height="${CANVAS_H}" viewBox="0 0 ${CANVAS_W} ${CANVAS_H}">${paths}</svg>`;
+}
+
+/** feColorMatrix offsets in encoded LAB. dL is on R, dA on G, dB on B. */
+function labShiftMatrix(dL: number, dA: number, dB: number): string {
+  const f = (n: number) => (Number.isFinite(n) ? n : 0).toFixed(6);
+  return `1.000000 0.000000 0.000000 0.000000 ${f(dL)} 0.000000 1.000000 0.000000 0.000000 ${f(dA)} 0.000000 0.000000 1.000000 0.000000 ${f(dB)} 0.000000 0.000000 0.000000 1.000000 0.000000`;
 }
 
 function transfer(idIn: string, idOut: string, table: string): string {
@@ -1121,17 +1311,15 @@ function lerpEncoded(p: string, enc: string, maskId: string, flood: string, alph
 }
 
 /**
- * Lip paint stage. Runs in sRGB after every LAB support layer.
+ * Lip paint stage. Runs after every LAB support layer.
  *
- *   hard = redness outline minus the mouth hole
- *   ramp = blur(erode(hard, edge)) clipped by hard, so alpha is 0 past the border
+ *   hard = lip outline, minus lipInner when that ring is present
+ *   ramp = blur(erode(hard, 1..2px), feather 1..3px), not clipped to hard
+ *   hole = dilate(lipInner) punched out of the ramp so teeth stay bare
  *   m = ramp ^ LIP_MASK_GAMMA * role alpha
- *   C = feBlend mode="color": hue/sat from the product, luminosity from
- *       the camera (W3C SetLum; SVG form of Banuba HSV-Color)
- *   D = feBlend mode="soft-light" of the product over C (W3C; matches
- *       Banuba softlight.glsl except when the backdrop is below 0.25
- *       and the blend is above 0.5)
- *   out = lerp(base, LIP_COLOR_KEEP*C + LIP_DEPTH*D, m)
+ *   mean-shift (all three means): encode(camera) -> affine -> decode
+ *     out = lerp(base, shifted, m)
+ *   fallback (means missing): color blend, soft-light, optional L shift
  */
 function lipStage(
   base: string,
@@ -1139,21 +1327,56 @@ function lipStage(
   maskId: string,
 ): { xml: string; out: string } {
   const p = "lp";
-  const xml = [
+  const parts = [
     `<feImage href="#${maskId}" x="0" y="0" width="${CANVAS_W}" height="${CANVAS_H}" preserveAspectRatio="none" result="${p}sh"/>`,
     `<feMorphology in="${p}sh" operator="erode" radius="${job.kernel}" result="${p}er"/>`,
-    `<feGaussianBlur in="${p}er" stdDeviation="${job.sigma.toFixed(3)}" result="${p}bl"/>`,
-    `<feComposite in="${p}bl" in2="${p}sh" operator="in" result="${p}cl"/>`,
+    `<feGaussianBlur in="${p}er" stdDeviation="${job.sigmaText}" result="${p}bl"/>`,
+  ];
+  const hasHole = job.stamps.some((s) => s.hole && s.hole.length >= 3);
+  if (hasHole) {
+    const guard = Math.min(3, Math.max(1, Math.round(job.sigma)));
+    parts.push(
+      `<feImage href="#${maskId}h" x="0" y="0" width="${CANVAS_W}" height="${CANVAS_H}" preserveAspectRatio="none" result="${p}hh"/>`,
+      `<feMorphology in="${p}hh" operator="dilate" radius="${guard}" result="${p}hd"/>`,
+      `<feComposite in="${p}bl" in2="${p}hd" operator="out" result="${p}cl"/>`,
+    );
+  } else {
+    parts.push(`<feOffset in="${p}bl" dx="0" dy="0" result="${p}cl"/>`);
+  }
+  parts.push(
     `<feComponentTransfer in="${p}cl" result="${p}gm"><feFuncA type="gamma" amplitude="1" exponent="${LIP_MASK_GAMMA.toFixed(3)}" offset="0"/></feComponentTransfer>`,
     `<feComponentTransfer in="${p}gm" result="${p}mk"><feFuncA type="linear" slope="${job.alpha.toFixed(4)}" intercept="0"/></feComponentTransfer>`,
-    `<feFlood flood-color="${job.paint}" flood-opacity="1" result="${p}fl"/>`,
-    `<feBlend in="${p}fl" in2="${base}" mode="color" result="${p}co"/>`,
-    `<feBlend in="${p}fl" in2="${p}co" mode="soft-light" result="${p}sf"/>`,
-    `<feComposite in="${p}co" in2="${p}sf" operator="arithmetic" k1="0" k2="${LIP_COLOR_KEEP.toFixed(4)}" k3="${LIP_DEPTH.toFixed(4)}" k4="0" result="${p}sl"/>`,
-    `<feComposite in="${p}sl" in2="${p}mk" operator="in" result="${p}sd"/>`,
+  );
+  let colored: string;
+  if (job.meanShift) {
+    const enc = encodeStep("lpe", base);
+    parts.push(enc.xml);
+    parts.push(matrix(enc.out, "lpes", labShiftMatrix(job.dL, job.dA, job.dB)));
+    const dec = decodeStep("lpd", "lpes");
+    parts.push(dec.xml);
+    colored = dec.out;
+  } else {
+    parts.push(
+      `<feFlood flood-color="${job.paint}" flood-opacity="1" result="${p}fl"/>`,
+      `<feBlend in="${p}fl" in2="${base}" mode="color" result="${p}co"/>`,
+      `<feBlend in="${p}fl" in2="${p}co" mode="soft-light" result="${p}sf"/>`,
+      `<feComposite in="${p}co" in2="${p}sf" operator="arithmetic" k1="0" k2="${LIP_COLOR_KEEP.toFixed(4)}" k3="${LIP_DEPTH.toFixed(4)}" k4="0" result="${p}sl"/>`,
+    );
+    colored = `${p}sl`;
+    if (job.dL !== 0) {
+      const enc = encodeStep("lpe", colored);
+      parts.push(enc.xml);
+      parts.push(matrix(enc.out, "lpes", labShiftMatrix(job.dL, 0, 0)));
+      const dec = decodeStep("lpd", "lpes");
+      parts.push(dec.xml);
+      colored = dec.out;
+    }
+  }
+  parts.push(
+    `<feComposite in="${colored}" in2="${p}mk" operator="in" result="${p}sd"/>`,
     `<feBlend in="${p}sd" in2="${base}" mode="normal" result="${p}out"/>`,
-  ].join("");
-  return { xml, out: `${p}out` };
+  );
+  return { xml: parts.join(""), out: `${p}out` };
 }
 
 function veilMaskSvg(id: string, v: Ellipse): string {
@@ -1208,19 +1431,25 @@ function buildJob(e: VtoEffect, role: string, lm: FaceLandmarks | undefined, jit
 }
 
 /**
- * Inward vermillion ramp, in canvas px. Smaller than the 0.06 support
- * feather, and the lip stage clips it to the outline so it cannot halo.
+ * Erode radius is 1 or 2 px. Feather is 1 to 3 px, separate from that radius.
+ * sigmaText is the 3-decimal string written to both stdDeviation and data-sigma.
+ * It is toFixed of the unrounded ry. ry 37.49 yields 1.687; the 1-decimal
+ * data-ry 37.5 yields 1.688, so the attribute is the wrong input.
  */
-export function lipVermillionEdge(interEye: number, lipRy: number): { radius: number; sigma: number } {
+export function lipVermillionEdge(interEye: number, lipRy: number): { radius: number; sigma: number; sigmaText: string } {
   const dist = Number.isFinite(interEye) && interEye > 1 ? interEye : 304;
-  let radius = Math.round(dist * 0.01);
-  if (radius < 2) radius = 2;
-  if (radius > 4) radius = 4;
   const ry = Number.isFinite(lipRy) && lipRy > 1 ? lipRy : 40;
-  const cap = Math.max(1, Math.floor(ry * 0.18));
-  if (radius > cap) radius = cap;
-  const sigma = Math.max(0.6, Math.round(radius * 0.45 * 1000) / 1000);
-  return { radius, sigma };
+  const radius = ry < dist * 0.08 ? 1 : 2;
+  const clamped = Math.min(3, Math.max(1, ry * 0.045));
+  const sigmaText = clamped.toFixed(3);
+  return { radius, sigma: Number(sigmaText), sigmaText };
+}
+
+/** ry is the unrounded stamp half-height the SVG sigma was computed from. */
+export function lipPaintEdge(lm?: FaceLandmarks): { radius: number; sigma: number; sigmaText: string; ry: number } {
+  const raw = finishStamps("lip_color", stampsFor("lip_color", lm), 1, 0, faceAxis(lm));
+  const ry = raw.length > 0 ? Math.min(...raw.map((s) => s.ry)) : 40;
+  return { ...lipVermillionEdge(interEyePx(lm), ry), ry };
 }
 
 /** Lips: redness outline, inward edge, alpha ramp unchanged. */
@@ -1240,7 +1469,36 @@ function buildLipJob(
   if (raw.length === 0) return null;
   const ry = Math.min(...raw.map((s) => s.ry));
   const edge = lipVermillionEdge(interEyePx(lm), ry);
-  return { paint, alpha, sigma: edge.sigma, kernel: edge.radius, stamps: raw };
+  const rgb = hexToRgb(paint);
+  const meanLIn = lm?.lipMeanL;
+  const meanAIn = lm?.lipMeanA;
+  const meanBIn = lm?.lipMeanB;
+  const means: LipMeans | undefined = lipChannel(meanLIn, 0, 100) && lipChannel(meanAIn, -128, 127) && lipChannel(meanBIn, -128, 127)
+    ? { L: meanLIn, a: meanAIn, b: meanBIn }
+    : undefined;
+  const shifted = rgb && means ? lipMeanShiftDelta(rgb, means, LIP_MEAN_SHIFT_K) : null;
+  const meanL = lipChannel(meanLIn, 0, 100) ? meanLIn : null;
+  const fallbackK = lipShiftK(role);
+  const targetL = rgb ? srgbToLab(rgb[0], rgb[1], rgb[2]).L : Number.NaN;
+  const fallbackDL = !shifted && meanL !== null && Number.isFinite(targetL)
+    ? fallbackK * (targetL - meanL) / 100
+    : 0;
+  return {
+    paint,
+    alpha,
+    sigma: edge.sigma,
+    sigmaText: edge.sigmaText,
+    kernel: edge.radius,
+    stamps: raw,
+    shiftK: shifted ? LIP_MEAN_SHIFT_K : fallbackK,
+    dL: shifted ? shifted.dL : fallbackDL,
+    dA: shifted ? shifted.dA : 0,
+    dB: shifted ? shifted.dB : 0,
+    meanShift: shifted !== null,
+    lipMeanL: meanL,
+    lipMeanA: means ? means.a : null,
+    lipMeanB: means ? means.b : null,
+  };
 }
 
 export function faceCardSvg(
@@ -1309,6 +1567,7 @@ export function faceCardSvg(
   pix = emitLab(over, "o", pix);
   if (lip) {
     defs.push(lipMaskSvg(lip, "lpm"));
+    if (lip.stamps.some((s) => s.hole && s.hole.length >= 3)) defs.push(lipHoleSvg(lip, "lpmh"));
     const step = lipStage(pix, lip, "lpm");
     prims.push(step.xml);
     pix = step.out;

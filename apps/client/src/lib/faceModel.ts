@@ -31,18 +31,43 @@ let sessionPromise: Promise<OrtSession | null> | null = null;
  * only fetched when a photo is actually processed. Any failure (offline,
  * blocked chunk, no wasm support) permanently resolves null for this page
  * load and the detector falls back to the heuristic.
+ *
+ * Shared with the face-parsing session. numThreads stays 1: the wasm
+ * pthread build needs cross-origin isolation this page does not set, and
+ * the int8 parse graph was checked on the single-thread wasm EP.
  */
 let ortModule: OrtModule | null | undefined;
 
-async function getOrt(): Promise<OrtModule | null> {
+type OrtWithEnv = OrtModule & { env?: { wasm?: { numThreads?: number } } };
+
+export async function loadOrtRuntime(): Promise<OrtModule | null> {
   if (ortModule !== undefined) return ortModule;
   try {
-    const mod = (await import("onnxruntime-web/wasm")) as unknown as { default?: OrtModule } & OrtModule;
-    ortModule = (mod.default ?? mod) as OrtModule;
+    const mod = (await import("onnxruntime-web/wasm")) as unknown as { default?: OrtWithEnv } & OrtWithEnv;
+    const ort = (mod.default ?? mod) as OrtWithEnv;
+    if (ort.env?.wasm) ort.env.wasm.numThreads = 1;
+    ortModule = ort;
   } catch {
     ortModule = null;
   }
   return ortModule;
+}
+
+let ortTail: Promise<void> = Promise.resolve();
+
+/**
+ * The wasm EP is one runtime. Overlapping session.run calls corrupt it,
+ * so the face-frame session and the lip-parse session share this queue.
+ */
+export function withOrtLock<T>(job: () => Promise<T>): Promise<T> {
+  const prev = ortTail;
+  let release: () => void = () => {};
+  ortTail = new Promise<void>((resolve) => { release = resolve; });
+  return prev.then(job).finally(release);
+}
+
+export function releaseOrt(tensor: { dispose?: () => void } | null | undefined): void {
+  try { tensor?.dispose?.(); } catch { /* buffer already released */ }
 }
 
 /**
@@ -52,13 +77,13 @@ async function getOrt(): Promise<OrtModule | null> {
 export function loadFaceFrameSession(): Promise<OrtSession | null> {
   if (!sessionPromise) {
     sessionPromise = (async () => {
-      const ort = await getOrt();
+      const ort = await loadOrtRuntime();
       if (!ort) return null;
       try {
         const buf = await fetch(MODEL_URL).then((r) => r.arrayBuffer());
-        return await ort.InferenceSession.create(new Uint8Array(buf), {
+        return await withOrtLock(() => ort.InferenceSession.create(new Uint8Array(buf), {
           executionProviders: ["wasm"],
-        });
+        }));
       } catch {
         return null;
       }
@@ -109,7 +134,7 @@ export interface ModelFaceBox {
 export async function detectFaceFrameModel(canvas: HTMLCanvasElement): Promise<ModelFaceBox | null> {
   const session = await loadFaceFrameSession();
   if (!session) return null;
-  const ort = await getOrt();
+  const ort = await loadOrtRuntime();
   if (!ort) return null;
   try {
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -117,40 +142,48 @@ export async function detectFaceFrameModel(canvas: HTMLCanvasElement): Promise<M
     const { data, scale, padX, padY } = letterbox(ctx);
     if (data.length === 0) return null;
     const inputName = session.inputNames[0] ?? "images";
-    const tensor = new ort.Tensor("float32", data, [1, 3, INPUT, INPUT]);
-    const out: Record<string, OrtTensor> = await session.run({ [inputName]: tensor });
-    const first = Object.values(out)[0];
-    if (!first) return null;
+    return await withOrtLock(async () => {
+      const tensor = new ort.Tensor("float32", data, [1, 3, INPUT, INPUT]);
+      let out: Record<string, OrtTensor> | undefined;
+      try {
+        out = await session.run({ [inputName]: tensor });
+        const first = Object.values(out)[0];
+        if (!first) return null;
 
-    // YOLO11 ONNX export: [1, 4+nc, N] with nc=1 -> [1,5,8400] cxcywh+conf.
-    const y = first.data as Float32Array;
-    const dims = first.dims as number[];
-    const rows = Number(dims[1]) || 5;
-    const n = Number(dims[2]) || y.length / rows;
-    const H = canvas.height, W = canvas.width;
+        // YOLO11 ONNX export: [1, 4+nc, N] with nc=1 -> [1,5,8400] cxcywh+conf.
+        const y = first.data as Float32Array;
+        const dims = first.dims as number[];
+        const rows = Number(dims[1]) || 5;
+        const n = Number(dims[2]) || y.length / rows;
+        const H = canvas.height, W = canvas.width;
 
-    let bestConf = 0, best = -1;
-    for (let i = 0; i < n; i++) {
-      const conf = y[(rows - 1) * n + i] ?? 0;
-      if (conf > bestConf) { bestConf = conf; best = i; }
-    }
-    if (best < 0 || bestConf < CONF_THRESHOLD) return null;
+        let bestConf = 0, best = -1;
+        for (let i = 0; i < n; i++) {
+          const conf = y[(rows - 1) * n + i] ?? 0;
+          if (conf > bestConf) { bestConf = conf; best = i; }
+        }
+        if (best < 0 || bestConf < CONF_THRESHOLD) return null;
 
-    // Model space -> 480 canvas space -> original canvas fractions.
-    const mx = y[best] ?? 0, my = y[n + best] ?? 0, mw = y[2 * n + best] ?? 0, mh = y[3 * n + best] ?? 0;
-    const inv = 1 / scale;
-    const x0 = (mx - mw / 2) * inv - padX * inv;
-    const y0 = (my - mh / 2) * inv - padY * inv;
-    const w = mw * inv, h = mh * inv;
-    return {
-      box: {
-        x: Math.max(0, Math.min(1, x0 / W)),
-        y: Math.max(0, Math.min(1, y0 / H)),
-        w: Math.min(1, w / W),
-        h: Math.min(1, h / H),
-      },
-      conf: bestConf,
-    };
+        // Model space -> 480 canvas space -> original canvas fractions.
+        const mx = y[best] ?? 0, my = y[n + best] ?? 0, mw = y[2 * n + best] ?? 0, mh = y[3 * n + best] ?? 0;
+        const inv = 1 / scale;
+        const x0 = (mx - mw / 2) * inv - padX * inv;
+        const y0 = (my - mh / 2) * inv - padY * inv;
+        const w = mw * inv, h = mh * inv;
+        return {
+          box: {
+            x: Math.max(0, Math.min(1, x0 / W)),
+            y: Math.max(0, Math.min(1, y0 / H)),
+            w: Math.min(1, w / W),
+            h: Math.min(1, h / H),
+          },
+          conf: bestConf,
+        };
+      } finally {
+        releaseOrt(tensor);
+        if (out) for (const t of Object.values(out)) releaseOrt(t);
+      }
+    });
   } catch {
     return null;
   }
