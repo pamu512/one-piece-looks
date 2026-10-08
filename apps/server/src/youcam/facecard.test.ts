@@ -18,6 +18,8 @@ import {
   labLerp,
   labMatrixText,
   labToSrgb,
+  lipEdgeRamp,
+  lipEdgeTransfer,
   lipFleshBand,
   lipMaskAlpha,
   lipMeanShiftDelta,
@@ -25,7 +27,10 @@ import {
   lipVermillionEdge,
   LIP_COLOR_KEEP,
   LIP_DEPTH,
+  LIP_EDGE_HI,
+  LIP_FEATHER_KNEE,
   LIP_MASK_GAMMA,
+  LIP_SMALL_PX,
   LIP_THIN_PX,
   oddFeatherKernel,
   srgbToLab,
@@ -177,7 +182,7 @@ describe("faceCardSvg", () => {
     expect(cy).toBeLessThan(950);
   });
 
-  it("erodes the lip 1 to 2 px and feathers 1 to 3 px without clipping to the hard outline", () => {
+  it("erodes the lip 1 to 3 px and feathers 1 to 3 px without clipping to the hard outline", () => {
     const svg = faceCardSvg("statement", EFFECTS, 7, FACE_B64, LM);
     const support = oddFeatherKernel(interEyePx(LM), 0.06);
     const morph = svg.match(/<feMorphology in="lpsh" operator="erode" radius="(\d+)" result="lper"\/>/);
@@ -187,7 +192,7 @@ describe("faceCardSvg", () => {
     const radius = Number(morph![1]);
     const sigma = Number(blur![1]);
     expect(radius).toBeGreaterThanOrEqual(1);
-    expect(radius).toBeLessThanOrEqual(2);
+    expect(radius).toBeLessThanOrEqual(3);
     expect(sigma).toBeGreaterThanOrEqual(1);
     expect(sigma).toBeLessThanOrEqual(3);
     expect(radius).toBeLessThan(support);
@@ -209,7 +214,7 @@ describe("faceCardSvg", () => {
     expect(attr(lipTag, "data-sigma")).toBe(edge.sigmaText);
     expect(attr(lipTag, "data-sigma")).toBe(blur![1]);
     expect(lipVermillionEdge(Number.NaN, Number.NaN).radius).toBeGreaterThanOrEqual(1);
-    expect(lipVermillionEdge(Number.NaN, Number.NaN).radius).toBeLessThanOrEqual(2);
+    expect(lipVermillionEdge(Number.NaN, Number.NaN).radius).toBeLessThanOrEqual(3);
   });
 
   it("feather sigma uses the unrounded ry, so 37.49 stays 1.687", () => {
@@ -703,8 +708,7 @@ describe("lip edge scale", () => {
     const normal = lipVermillionEdge(240, 37.49);
     expect(normal.measure).toBeCloseTo(74.98, 2);
     expect(normal.edgeRamp).toBe(false);
-    expect(normal.radius).toBeGreaterThanOrEqual(1);
-    expect(normal.radius).toBeLessThanOrEqual(2);
+    expect(normal.radius).toBe(3);
     expect(normal.sigma).toBeGreaterThanOrEqual(1);
     expect(normal.sigma).toBeLessThanOrEqual(3);
     expect(normal.sigmaText).toBe("1.687");
@@ -739,9 +743,21 @@ describe("lip edge scale", () => {
     const svg = faceCardSvg("anchor", EFFECTS, 7, FACE_B64, tiny);
     expect(svg).not.toMatch(/<feMorphology in="lpsh" operator="erode"/);
     expect(svg).toContain('data-ramp="edge"');
-    expect(svg).toContain('slope="12.5000"');
-    expect(svg).toContain('intercept="-5.2500"');
     const edge = lipPaintEdge(tiny);
+    // Replaces intercept "-5.2500": the cutoff window is still 0.42..0.5.
+    // A shorter band slides it, and the SVG linear transfer matches lipEdgeRamp.
+    const ramp = lipEdgeTransfer(edge.measure);
+    const { lo, hi } = ramp;
+    expect(ramp.slopeText).toBe("12.5000");
+    expect(svg).toContain(`slope="${ramp.slopeText}"`);
+    expect(svg).toContain(`intercept="${ramp.interceptText}"`);
+    expect(hi).toBeCloseTo(0.22, 2);
+    expect(lo).toBeCloseTo(0.14, 2);
+    const cutoffTx = lipEdgeTransfer(LIP_THIN_PX);
+    expect(cutoffTx.slopeText).toBe("12.5000");
+    expect(cutoffTx.interceptText).toBe("-5.2500");
+    expect(hi).toBeLessThan(LIP_EDGE_HI);
+    expect(Number(ramp.interceptText)).toBeGreaterThan(-5.25);
     expect(edge.edgeRamp).toBe(true);
     expect(edge.radius).toBe(0);
     expect(edge.sigma).toBeLessThan(1);
@@ -749,18 +765,109 @@ describe("lip edge scale", () => {
     expect(normal).toContain(`exponent="${LIP_MASK_GAMMA.toFixed(3)}"`);
     expect(normal).toContain('data-ramp="gamma"');
     const statement = zoneAlpha("lip_color", 80, "statement");
+    const anchor = zoneAlpha("lip_color", 80, "anchor");
+    const lift = zoneAlpha("lip_color", 80, "lift");
     expect(lipMaskAlpha(0.5, statement, true)).toBeCloseTo(statement, 5);
     expect(lipMaskAlpha(0.3, statement, true)).toBe(0);
     expect(lipMaskAlpha(0.5, statement, false)).toBeLessThan(statement * 0.3);
+    const short = edge.measure;
+    expect(lipMaskAlpha(0.5, anchor, true, short)).toBeCloseTo(anchor, 5);
+    expect(lipMaskAlpha(hi, anchor, true, short)).toBeCloseTo(anchor, 5);
+    expect(lipMaskAlpha(0.5, anchor, true, short)).toBeLessThan(lipMaskAlpha(0.5, lift, true, short));
+    expect(lipMaskAlpha(0.5, lift, true, short)).toBeLessThan(lipMaskAlpha(0.5, statement, true, short));
+    for (const c of [0, lo * 0.5, lo, (lo + hi) / 2, hi, 0.5, 1]) {
+      const linear = Math.min(1, Math.max(0, (c - lo) / (hi - lo)));
+      expect(lipMaskAlpha(c, anchor, true, short)).toBeCloseTo(linear * anchor, 5);
+    }
+    const cutoff = lipEdgeRamp(LIP_THIN_PX);
+    expect(cutoff.lo).toBeCloseTo(0.42, 5);
+    expect(cutoff.hi).toBeCloseTo(0.5, 5);
     const px: [number, number, number] = [150, 80, 70];
     const edgeMeans: LipMeans = { L: 40, a: 20, b: 12 };
     const onEdge = applyLipMeanShift(px, [179, 18, 46], 0.5, edgeMeans, "statement", 80, true);
     const skirt = applyLipMeanShift(px, [179, 18, 46], 0.5, edgeMeans, "statement", 80, false);
     expect(onEdge).not.toEqual(skirt);
-    const anchor = zoneAlpha("lip_color", 80, "anchor");
-    const lift = zoneAlpha("lip_color", 80, "lift");
     expect(lipMaskAlpha(1, anchor, true)).toBeLessThan(lipMaskAlpha(1, lift, true));
     expect(lipMaskAlpha(1, lift, true)).toBeLessThan(lipMaskAlpha(1, statement, true));
+  });
+
+  it("slides the thin ramp with lip size and matches the SVG linear transfer", () => {
+    const anchor = zoneAlpha("lip_color", 80, "anchor");
+    const at = (px: number) => lipEdgeRamp(px).hi;
+    expect(at(6)).toBeCloseTo(at(8), 5);
+    expect(at(8)).toBeLessThan(at(10));
+    expect(at(10)).toBeLessThan(at(12));
+    expect(at(12)).toBeLessThan(at(14));
+    expect(at(14)).toBeCloseTo(0.5, 5);
+    expect(at(10)).toBeCloseTo(0.22, 4);
+    expect(lipEdgeRamp(10).lo).toBeCloseTo(0.14, 4);
+    expect(lipMaskAlpha(lipEdgeRamp(10).lo, anchor, true, 10)).toBe(0);
+    expect(lipMaskAlpha(at(10), anchor, true, 10)).toBeCloseTo(anchor, 5);
+    expect(lipMaskAlpha(Number.NaN, anchor, true, 10)).toBe(0);
+    expect(lipMaskAlpha(-1, anchor, true, 10)).toBe(0);
+    expect(lipEdgeRamp(Number.NaN)).toEqual(lipEdgeRamp(LIP_THIN_PX));
+    expect(lipEdgeRamp(0)).toEqual(lipEdgeRamp(LIP_THIN_PX));
+    expect(lipEdgeRamp(-4)).toEqual(lipEdgeRamp(LIP_THIN_PX));
+    const quantized = (c: number, measure: number) => {
+      const t = lipEdgeTransfer(measure);
+      const y = Number(t.slopeText) * c + Number(t.interceptText);
+      return Math.min(1, Math.max(0, y));
+    };
+    for (const measure of [8, 10, 12, LIP_THIN_PX, 20]) {
+      expect(quantized(0.5, measure)).toBeGreaterThanOrEqual(0.999);
+      for (let i = 0; i <= 20; i++) {
+        const c = i / 20;
+        const exact = lipMaskAlpha(c, 1, true, measure);
+        expect(Math.abs(quantized(c, measure) - exact)).toBeLessThan(5e-4);
+      }
+    }
+    const under = lipVermillionEdge(240, (LIP_SMALL_PX - 2) / 2, 10);
+    expect(under.edgeRamp).toBe(true);
+    expect(under.measure).toBeCloseTo(10, 5);
+    expect(under.radius).toBe(0);
+    expect(lipEdgeRamp(under.measure).hi).toBeCloseTo(0.22, 2);
+    const over = lipVermillionEdge(240, (LIP_SMALL_PX + 2) / 2, 10);
+    expect(over.edgeRamp).toBe(false);
+    expect(over.radius).toBe(3);
+    expect(over.sigma).toBeGreaterThanOrEqual(1);
+    expect(over.sigma).toBeLessThanOrEqual(3);
+    expect(lipVermillionEdge(240, 37.49, 0).sigmaText).toBe("1.687");
+    expect(lipVermillionEdge(Number.POSITIVE_INFINITY, 37.49).sigma).toBeLessThanOrEqual(3);
+  });
+
+  it("keeps a tall mouth on a 1 to 3 px erode and holds the feather at the knee", () => {
+    const tall = lipVermillionEdge(400, 60);
+    const capped = (Math.min(120, LIP_FEATHER_KNEE) * 0.5) * 0.045;
+    expect(tall.measure).toBeCloseTo(120, 5);
+    expect(tall.edgeRamp).toBe(false);
+    expect(tall.sigmaText).toBe(Math.min(3, Math.max(1, capped)).toFixed(3));
+    expect(tall.sigma).toBeLessThanOrEqual(2);
+    expect(tall.sigma).toBeGreaterThanOrEqual(1);
+    expect(tall.radius).toBe(3);
+    const guardFromCappedFeather = Math.min(tall.sigma, 0.12 * tall.measure);
+    const guardIfCapped = guardFromCappedFeather < 1 ? 0 : Math.min(3, Math.round(guardFromCappedFeather));
+    expect(tall.guard).toBeGreaterThanOrEqual(guardIfCapped);
+    expect(tall.guard).toBeGreaterThanOrEqual(1);
+    expect(tall.guard).toBeLessThanOrEqual(3);
+
+    const glossy = lipVermillionEdge(400, 45, 16);
+    expect(glossy.measure).toBeCloseTo(16, 5);
+    expect(glossy.measure).toBeGreaterThanOrEqual(LIP_THIN_PX);
+    expect(glossy.edgeRamp).toBe(false);
+    expect(glossy.radius).toBe(3);
+    expect(glossy.sigma).toBeGreaterThanOrEqual(1);
+    expect(glossy.sigma).toBeLessThanOrEqual(3);
+    expect(glossy.guard).toBeGreaterThanOrEqual(1);
+    expect(glossy.guard).toBeLessThanOrEqual(3);
+
+    const narrowOnTall = lipVermillionEdge(400, 40, 10);
+    expect(narrowOnTall.measure).toBeCloseTo(10, 5);
+    expect(narrowOnTall.measure).toBeLessThan(LIP_THIN_PX);
+    expect(40 * 2).toBeGreaterThanOrEqual(LIP_SMALL_PX);
+    expect(narrowOnTall.edgeRamp).toBe(false);
+    expect(narrowOnTall.radius).toBe(3);
+    expect(narrowOnTall.sigma).toBeGreaterThanOrEqual(1);
+    expect(narrowOnTall.sigma).toBeLessThanOrEqual(3);
   });
 });
 

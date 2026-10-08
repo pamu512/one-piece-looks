@@ -7,10 +7,12 @@
  * Lips are their own stage after the LAB support layers. Coverage is
  * the client lip outline (parsing contour, or the redness fallback).
  * A class-11 lipInner is an evenodd hole, dilated after the blur so
- * the feather cannot paint teeth. No lipInner means no hole. Erode,
- * feather, and the hole guard scale with the lip's own band, so a
- * thin mouth is not eaten by a 1 px kernel. The blur is not clipped
- * back to the hard outline. When lipMeanL/A/B are all present, one
+ * the feather cannot paint teeth. No lipInner means no hole. A mouth
+ * shorter than LIP_SMALL_PX saturates its ramp at or before the blur
+ * half-transition, earlier on a shorter band, and skips the integer
+ * erode when that target is under 1 px. A taller mouth keeps a 1 to 2 px
+ * erode (radius 3) and a 1 to 3 px feather that stops growing past LIP_FEATHER_KNEE.
+ * The blur is not clipped back to the hard outline. When lipMeanL/A/B are all present, one
  * encoded-LAB affine runs on the unveiled photo so the lip mean moves
  * toward the product hex and per-pixel deviations stay. The mask then
  * lays that lip on the veiled base. The offset is one times (target
@@ -657,14 +659,35 @@ export interface LipMeans {
   b: number;
 }
 
-/** Blur alpha where a thin lip's ramp reaches 0, then full role alpha. */
+/**
+ * Blur alpha where a lip at the thin cutoff reaches 0, then full role alpha.
+ * A shorter lip slides both down by the same gap. See lipEdgeRamp.
+ */
 export const LIP_EDGE_LO = 0.42;
 export const LIP_EDGE_HI = 0.5;
+/** Canvas px at which the thin ramp's full-alpha point has slid to LIP_RAMP_REACH_HI. */
+const LIP_RAMP_REACH_PX = 10;
+const LIP_RAMP_REACH_HI = 0.22;
+/** Stop the slide here so a shorter lip does not paint the far blur halo. */
+const LIP_RAMP_HI_FLOOR = 0.18;
+const LIP_RAMP_LO_FLOOR = 0.04;
 /**
- * Vermillion band under this canvas height is thin: no integer erode,
- * feather below 1 px, ramp saturates at the blur's half-transition.
+ * Ramp scale, in canvas px. A band this tall keeps the 0.42..0.5 window.
+ * A shorter band slides that window down. See lipEdgeRamp.
  */
 export const LIP_THIN_PX = 14;
+/**
+ * Full height under this is a small mouth (open smile included).
+ * Four thin-cutoffs stays under a close-up lip, which keeps the
+ * normal erode and feather.
+ */
+export const LIP_SMALL_PX = LIP_THIN_PX * 4;
+/**
+ * Normal-lip feather stops growing once the lip is this tall (canvas px).
+ * The reference lip (ry 37.49, height 74.98) stays under it, so its
+ * sigma stays 1.687. Taller mouths were spilling past the outline.
+ */
+export const LIP_FEATHER_KNEE = 75;
 
 function lipChannel(n: number | undefined, lo: number, hi: number): n is number {
   return typeof n === "number" && Number.isFinite(n) && n >= lo && n <= hi;
@@ -732,7 +755,8 @@ function rgbByte(c: number): number {
  * lays the result on `base`. Omitting `source` shifts `base` itself.
  * If a or b is missing, a valid L still uses the color/soft-light L shift.
  * colorIntensity defaults to 80, the lock card's lip intensity.
- * thin matches LipEdge.edgeRamp: the half-transition carries full role alpha.
+ * thin matches LipEdge.edgeRamp. measure scales the window; omitted, it
+ * is the thin cutoff, where the half-transition carries full role alpha.
  */
 export function applyLipMeanShift(
   base: readonly [number, number, number],
@@ -743,12 +767,13 @@ export function applyLipMeanShift(
   colorIntensity = 80,
   thin = false,
   source?: readonly [number, number, number],
+  measure = LIP_THIN_PX,
 ): [number, number, number] {
   const orig: [number, number, number] = [rgbByte(base[0] ?? 0), rgbByte(base[1] ?? 0), rgbByte(base[2] ?? 0)];
   const src: [number, number, number] = source
     ? [rgbByte(source[0] ?? 0), rgbByte(source[1] ?? 0), rgbByte(source[2] ?? 0)]
     : orig;
-  const m = lipMaskAlpha(coverage, zoneAlpha("lip_color", colorIntensity, role), thin);
+  const m = lipMaskAlpha(coverage, zoneAlpha("lip_color", colorIntensity, role), thin, measure);
   if (!lipMeansOk(means)) {
     const lOnly = means !== undefined && lipChannel(means.L, 0, 100) ? means.L : undefined;
     return applyLipTexture(orig, lipstick, m, lOnly, role);
@@ -761,18 +786,49 @@ export function applyLipMeanShift(
 }
 
 /**
- * Blurred coverage after the skirt and the role alpha.
- * Thin lips saturate at the half-transition so the 0.5 blur line
- * carries the full role alpha. Thicker lips keep the gamma skirt.
+ * Thin-lip window. At the cutoff the half-transition (0.5) is full role
+ * alpha. A 10px lip slides to 0.14..0.22. The gap stays 0.08.
  */
-export function lipMaskAlpha(coverage: number, roleAlpha: number, thin = false): number {
+export function lipEdgeRamp(measure: number): { lo: number; hi: number } {
+  const m = Number.isFinite(measure) && measure > 0 ? measure : LIP_THIN_PX;
+  const u = Math.min(1, m / LIP_THIN_PX);
+  const reachU = LIP_RAMP_REACH_PX / LIP_THIN_PX;
+  const denom = 1 - reachU;
+  const shift = denom > 0 ? (1 - u) * ((LIP_EDGE_HI - LIP_RAMP_REACH_HI) / denom) : 0;
+  const hi = Math.max(LIP_RAMP_HI_FLOOR, LIP_EDGE_HI - shift);
+  const lo = Math.max(LIP_RAMP_LO_FLOOR, hi - (LIP_EDGE_HI - LIP_EDGE_LO));
+  if (!(hi > lo)) return { lo: LIP_EDGE_LO, hi: LIP_EDGE_HI };
+  return { lo, hi };
+}
+
+/**
+ * feFuncA linear slope and intercept for lipEdgeRamp, at 4 decimal places.
+ * lipMaskAlpha uses the unrounded window. The two stay within 5e-4.
+ */
+export function lipEdgeTransfer(measure: number): { lo: number; hi: number; slopeText: string; interceptText: string } {
+  const { lo, hi } = lipEdgeRamp(measure);
+  const span = hi - lo;
+  const slope = 1 / span;
+  const intercept = -lo * slope;
+  return { lo, hi, slopeText: slope.toFixed(4), interceptText: intercept.toFixed(4) };
+}
+
+/**
+ * Blurred coverage after the skirt and the role alpha.
+ * Thin lips use lipEdgeRamp(measure): the half-transition carries full
+ * role alpha, and a shorter band saturates earlier. Thicker lips keep
+ * the gamma skirt. measure defaults to the thin cutoff.
+ */
+export function lipMaskAlpha(coverage: number, roleAlpha: number, thin = false, measure = LIP_THIN_PX): number {
   const c = clamp01(coverage);
   const a = clamp01(roleAlpha);
   if (c === 0 || a === 0) return 0;
   if (!thin) return (c ** LIP_MASK_GAMMA) * a;
-  if (c <= LIP_EDGE_LO) return 0;
-  if (c >= LIP_EDGE_HI) return a;
-  return ((c - LIP_EDGE_LO) / (LIP_EDGE_HI - LIP_EDGE_LO)) * a;
+  const { lo, hi } = lipEdgeRamp(measure);
+  if (!(hi > lo)) return c >= hi ? a : 0;
+  if (c <= lo) return 0;
+  if (c >= hi) return a;
+  return ((c - lo) / (hi - lo)) * a;
 }
 
 function floodFor(hex: string): string {
@@ -1338,6 +1394,8 @@ interface LipJob {
   lipMeanB: number | null;
   guard: number;
   edgeRamp: boolean;
+  /** Canvas px the thin ramp slides on. Ignored when edgeRamp is false. */
+  measure: number;
 }
 
 function blushStops(paint: string): string {
@@ -1503,7 +1561,7 @@ function lerpEncoded(p: string, enc: string, maskId: string, flood: string, alph
  *   hard = lip outline, minus lipInner when that ring is present
  *   ramp = blur(erode(hard) or hard), feather scaled to the band, not clipped
  *   hole = dilate(lipInner) punched out of the ramp so teeth stay bare
- *   m = gamma skirt, or a half-transition ramp on a thin band, times role alpha
+ *   m = gamma skirt, or a thin-lip ramp that is full by the half-transition, times role alpha
  *   mean-shift (all three means): encode(unveiled photo) -> affine -> clamp -> decode
  *     out = lerp(current base, shifted, m)
  *   The skin veil runs before this stage. It darkens and warms the lip.
@@ -1546,10 +1604,9 @@ function lipStage(
     parts.push(`<feOffset in="${p}bl" dx="0" dy="0" result="${p}cl"/>`);
   }
   if (job.edgeRamp) {
-    const slope = 1 / (LIP_EDGE_HI - LIP_EDGE_LO);
-    const intercept = -LIP_EDGE_LO * slope;
+    const ramp = lipEdgeTransfer(job.measure);
     parts.push(
-      `<feComponentTransfer in="${p}cl" result="${p}gm"><feFuncA type="linear" slope="${slope.toFixed(4)}" intercept="${intercept.toFixed(4)}"/></feComponentTransfer>`,
+      `<feComponentTransfer in="${p}cl" result="${p}gm"><feFuncA type="linear" slope="${ramp.slopeText}" intercept="${ramp.interceptText}"/></feComponentTransfer>`,
     );
   } else {
     parts.push(
@@ -1657,7 +1714,7 @@ export interface LipEdge {
   sigmaText: string;
   /** Integer hole dilate. 0 punches the hole with no extra radius. */
   guard: number;
-  /** True when the ramp saturates at the blur half-transition. */
+  /** True when the ramp saturates at or before the blur half-transition. */
   edgeRamp: boolean;
   /** Canvas px used for the scale: vermillion band, else the full lip height. */
   measure: number;
@@ -1668,7 +1725,12 @@ export interface LipEdge {
  * otherwise the full height 2*ry). sigmaText is toFixed of the unrounded
  * measure. ry 37.49 with no band yields 1.687; the 1-decimal data-ry 37.5
  * yields 1.688, so the attribute is the wrong input.
- * Normal lips stay in a 1 to 3 px feather. A thin band drops the floor.
+ * A short lip (full height under LIP_SMALL_PX) drops the floor and uses
+ * the edge ramp. A taller mouth, even with a narrow band, keeps a 2.5 px
+ * erode (radius 3) and a 1 to 3 px feather so the skirt stays off the outline.
+ * Feather on that taller mouth stops growing past LIP_FEATHER_KNEE.
+ * The hole guard still follows the uncapped feather, so holding the
+ * skirt in does not open the teeth.
  */
 export function lipVermillionEdge(interEye: number, lipRy: number, bandPx?: number): LipEdge {
   const dist = Number.isFinite(interEye) && interEye > 1 ? interEye : 304;
@@ -1676,18 +1738,22 @@ export function lipVermillionEdge(interEye: number, lipRy: number, bandPx?: numb
   const full = ry * 2;
   const band = typeof bandPx === "number" && Number.isFinite(bandPx) && bandPx > 1 ? bandPx : full;
   const measure = Math.min(full, Math.max(1, band));
-  const thin = measure < LIP_THIN_PX;
-  const erode = Math.min(1.5, 0.08 * measure);
-  const radius = erode < 1 ? 0 : Math.min(2, Math.max(1, Math.round(erode)));
-  const sigmaRaw = (measure * 0.5) * 0.045;
-  const sigmaFloor = thin ? Math.min(1, Math.max(0.2, 0.08 * measure)) : 1;
+  const small = full < LIP_SMALL_PX;
+  // Normal mouths erode 2.5 px (radius 3) so the soft skirt stays inside a blurry
+  // outline. A short mouth may drop below 1 px and skip the erode.
+  const erode = small ? Math.min(1.5, 0.08 * measure) : 2.5;
+  const radius = erode < 1 ? 0 : Math.min(3, Math.max(1, Math.round(erode)));
+  const featherMeasure = small ? measure : Math.min(measure, LIP_FEATHER_KNEE);
+  const sigmaRaw = (featherMeasure * 0.5) * 0.045;
+  const sigmaFloor = small ? Math.min(1, Math.max(0.2, 0.08 * measure)) : 1;
   // Feather stays a lip-edge, not a face-wide blur, even on a large mouth.
   const sigma = Math.min(3, dist * 0.02, Math.max(sigmaFloor, sigmaRaw));
+  const sigmaWide = Math.min(3, dist * 0.02, Math.max(sigmaFloor, (measure * 0.5) * 0.045));
   const sigmaText = sigma.toFixed(3);
-  const guardRaw = Math.min(sigma, 0.12 * measure);
+  const guardRaw = Math.min(small ? sigma : sigmaWide, 0.12 * measure);
   // Under 1 px rounds away. Rounding 0.8 up to 1 eats a thin vermillion.
   const guard = guardRaw < 1 ? 0 : Math.min(3, Math.round(guardRaw));
-  return { radius, sigma: Number(sigmaText), sigmaText, guard, edgeRamp: thin, measure };
+  return { radius, sigma: Number(sigmaText), sigmaText, guard, edgeRamp: small, measure };
 }
 
 /** ry is the unrounded stamp half-height the SVG sigma was computed from. */
@@ -1749,6 +1815,7 @@ function buildLipJob(
     lipMeanB: means ? means.b : null,
     guard: edge.guard,
     edgeRamp: edge.edgeRamp,
+    measure: edge.measure,
   };
 }
 
