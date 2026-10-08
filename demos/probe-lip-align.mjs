@@ -18,10 +18,12 @@
  *
  * Usage: node demos/probe-lip-align.mjs
  * Env: FACES="face-c-blonde,face-d-tan" OUT=/tmp/opl-lipalign
+ *      LIPGT=demos/lipgt (default; hand-traced GT masks, see demos/lipgt/README.md;
+ *      set LIPGT=off to fall back to the redness reference)
  * Needs: mock server :8787, vite :5173.
  */
 import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -43,6 +45,28 @@ const OUT = process.env.OUT ?? "/tmp/opl-lipalign";
 mkdirSync(OUT, { recursive: true });
 for (const f of readdirSync(OUT)) { try { unlinkSync(join(OUT, f)); } catch {} }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Pass gate (unchanged): IoU >= 0.55 and centerErr <= 8 px on the 500x625 grid.
+const IOU_MIN = 0.55, CENTER_MAX = 8;
+const LIPGT = process.env.LIPGT ?? join(ROOT, "demos/lipgt");
+
+/**
+ * Hand-traced lip GT, already in probe space (500x625, same grid as planes()).
+ * File: <LIPGT>/<id>-mask-probe500x625.png, 8-bit, 255 = lip (outer minus
+ * mouth opening). Returns null when absent so the redness reference is used.
+ */
+function handGroundTruth(id) {
+  if (LIPGT === "off") return null;
+  const png = join(LIPGT, `${id}-mask-probe500x625.png`);
+  if (!existsSync(png)) return null;
+  const raw = join(OUT, `${id}-lipgt.gray`);
+  const r = spawnSync("ffmpeg", ["-y", "-i", png, "-f", "rawvideo", "-pix_fmt", "gray", raw], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error("lipgt decode failed " + r.stderr?.slice(-200));
+  const g = readFileSync(raw);
+  if (g.length !== 500 * 625) throw new Error(`lipgt ${id}: expected 500x625, got ${g.length} bytes`);
+  const mask = new Uint8Array(500 * 625);
+  for (let p = 0; p < mask.length; p++) mask[p] = g[p] >= 128 ? 1 : 0;
+  return { mask };
+}
 
 const FACE_PATHS = {
   "face-live": join(ROOT, "apps/client/public/fixtures/face-portrait-live.jpg"),
@@ -203,7 +227,9 @@ for (const id of FACES) {
   const bare = planes(join(OUT, `${id}-bare.png`));
   const anchor = planes(join(OUT, `${id}-anchor.png`));
 
-  const gt = mouthGroundTruth(bare, lm.faceBox);
+  const hand = handGroundTruth(id);
+  const gt = hand ?? mouthGroundTruth(bare, lm.faceBox);
+  const gtSource = hand ? "hand" : "redness";
   const gtS = maskStats(gt.mask);
   // Soft LAB: keep L near skin so opaque-era RGB>=60 misses lips, but a
   // face-wide soft floor also catches the veil. Restrict candidates to the
@@ -295,6 +321,8 @@ for (const id of FACES) {
 
   const row = {
     id,
+    gtSource,
+    pass: iou >= IOU_MIN && centerErr <= CENTER_MAX,
     iou: Number(iou.toFixed(3)),
     gtCoverage: Number(gtCoverage.toFixed(3)),
     centerErrPx: Number(centerErr.toFixed(1)),
@@ -309,7 +337,7 @@ for (const id of FACES) {
     gtBBox: gtS ? [gtS.minX, gtS.minY, gtS.maxX, gtS.maxY] : null,
   };
   results.push(row);
-  console.log(`${id}: IoU ${row.iou} GT-cover ${row.gtCoverage} centerErr ${row.centerErrPx}px (gt ${gtS?.n ?? 0}px, painted ${pS?.n ?? 0}px, detPoly->gtCover ${row.detLipPoly?.gtCoveredByDet})`);
+  console.log(`${id} [gt:${gtSource}${row.pass ? " PASS" : " FAIL"}]: IoU ${row.iou} GT-cover ${row.gtCoverage} centerErr ${row.centerErrPx}px (gt ${gtS?.n ?? 0}px, painted ${pS?.n ?? 0}px, detPoly->gtCover ${row.detLipPoly?.gtCoveredByDet})`);
   await context.close();
 }
 

@@ -1,0 +1,333 @@
+{
+ "image": "face-b-pulled-back.png",
+ "repo_path": "demos/.mask-qa/faces/face-b-pulled-back.png",
+ "width": 540,
+ "height": 360,
+ "outer": [
+  [
+   250.3,
+   235.8
+  ],
+  [
+   253.0,
+   232.3
+  ],
+  [
+   256.0,
+   231.4
+  ],
+  [
+   262.0,
+   229.4
+  ],
+  [
+   265.0,
+   228.6
+  ],
+  [
+   274.0,
+   228.3
+  ],
+  [
+   277.0,
+   228.9
+  ],
+  [
+   280.0,
+   229.8
+  ],
+  [
+   283.0,
+   229.7
+  ],
+  [
+   286.0,
+   228.7
+  ],
+  [
+   290.0,
+   228.4
+  ],
+  [
+   295.0,
+   228.4
+  ],
+  [
+   298.0,
+   229.3
+  ],
+  [
+   301.0,
+   229.6
+  ],
+  [
+   304.0,
+   231.0
+  ],
+  [
+   307.5,
+   232.0
+  ],
+  [
+   310.5,
+   233.2
+  ],
+  [
+   313.0,
+   235.3
+  ],
+  [
+   311.8,
+   236.8
+  ],
+  [
+   310.3,
+   238.5
+  ],
+  [
+   308.5,
+   241.0
+  ],
+  [
+   304.0,
+   245.8
+  ],
+  [
+   301.0,
+   248.5
+  ],
+  [
+   298.0,
+   250.0
+  ],
+  [
+   295.0,
+   250.8
+  ],
+  [
+   289.0,
+   252.8
+  ],
+  [
+   284.0,
+   253.6
+  ],
+  [
+   280.0,
+   253.8
+  ],
+  [
+   274.0,
+   253.2
+  ],
+  [
+   271.0,
+   252.7
+  ],
+  [
+   268.0,
+   251.7
+  ],
+  [
+   262.0,
+   249.0
+  ],
+  [
+   259.0,
+   247.1
+  ],
+  [
+   256.0,
+   244.5
+  ],
+  [
+   253.5,
+   241.0
+  ],
+  [
+   251.5,
+   238.0
+  ]
+ ],
+ "inner": [],
+ "mouth_open": false,
+ "notes": "Closed mouth; the dark line between the lips is the lip seam and counts as lip. The draft was an integer staircase and slightly tight. Top edge refined to the a* half-transition (cupid's bow dip added at x 280, y 229.8), lower lip bottom moved down about 1 to 2 px, commissures placed on the dark corner tips (250.3, 235.8) and (313, 235.3). Draft IoU vs final 0.902, mean boundary shift 0.7 px. Lip edges are clear; tolerance about +-1 px.",
+ "coord_convention": "source image pixels, pixel-center convention: (0,0) is the center of the top-left pixel; pixel (x,y) is lip when its center lies inside outer and outside inner",
+ "probe_transform": {
+  "note": "probe 500x625 px: X=(x+0.5-x0)*k-0.5, Y=(y+0.5-y0)*k-0.5 (center-crop to 3:4 at 480x640 by the fake camera, then normalizeTo45 center-crop to 4:5, 1000x1250, then ffmpeg scale to 500x625)",
+  "x0": 135.0,
+  "y0": 11.25,
+  "k": 1.85185185
+ },
+ "outer_probe": [
+  [
+   213.94,
+   416.26
+  ],
+  [
+   218.94,
+   409.78
+  ],
+  [
+   224.5,
+   408.11
+  ],
+  [
+   235.61,
+   404.41
+  ],
+  [
+   241.17,
+   402.93
+  ],
+  [
+   257.83,
+   402.37
+  ],
+  [
+   263.39,
+   403.48
+  ],
+  [
+   268.94,
+   405.15
+  ],
+  [
+   274.5,
+   404.96
+  ],
+  [
+   280.06,
+   403.11
+  ],
+  [
+   287.46,
+   402.56
+  ],
+  [
+   296.72,
+   402.56
+  ],
+  [
+   302.28,
+   404.22
+  ],
+  [
+   307.83,
+   404.78
+  ],
+  [
+   313.39,
+   407.37
+  ],
+  [
+   319.87,
+   409.22
+  ],
+  [
+   325.43,
+   411.44
+  ],
+  [
+   330.06,
+   415.33
+  ],
+  [
+   327.83,
+   418.11
+  ],
+  [
+   325.06,
+   421.26
+  ],
+  [
+   321.72,
+   425.89
+  ],
+  [
+   313.39,
+   434.78
+  ],
+  [
+   307.83,
+   439.78
+  ],
+  [
+   302.28,
+   442.56
+  ],
+  [
+   296.72,
+   444.04
+  ],
+  [
+   285.61,
+   447.74
+  ],
+  [
+   276.35,
+   449.22
+  ],
+  [
+   268.94,
+   449.59
+  ],
+  [
+   257.83,
+   448.48
+  ],
+  [
+   252.28,
+   447.56
+  ],
+  [
+   246.72,
+   445.7
+  ],
+  [
+   235.61,
+   440.7
+  ],
+  [
+   230.06,
+   437.19
+  ],
+  [
+   224.5,
+   432.37
+  ],
+  [
+   219.87,
+   425.89
+  ],
+  [
+   216.17,
+   420.33
+  ]
+ ],
+ "inner_probe": [],
+ "probe_stats": {
+  "px": 4032,
+  "cx": 270.62,
+  "cy": 423.77,
+  "bbox": [
+   214,
+   403,
+   329,
+   449
+  ]
+ },
+ "src_stats": {
+  "px": 1173
+ },
+ "vs_bisenet_draft": {
+  "iou": 0.902,
+  "mean_boundary_dist_px": 0.71,
+  "max_boundary_dist_px": 2.0
+ },
+ "simplify": {
+  "eps_outer": 0.05,
+  "eps_inner": 0,
+  "iou_vs_unsimplified": 0.9991
+ }
+}
