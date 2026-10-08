@@ -188,6 +188,38 @@ describe("face analysis", () => {
     expect(lowB).toContain('mode="color"');
   });
 
+  it("keeps a skin polygon and the straight lip shift", async () => {
+    const app = makeApp();
+    const { sessionId } = await makeSession(app);
+    const skin = [[0.3, 0.2], [0.7, 0.2], [0.72, 0.8], [0.28, 0.82]];
+    const face = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/face`,
+      payload: {
+        faceImageBase64: FACE_B64,
+        lock: LOCK,
+        landmarks: {
+          lipMeanL: 46, lipMeanA: 30, lipMeanB: 16,
+          skin,
+        },
+      },
+    });
+    expect(face.statusCode).toBe(200);
+    const looks = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Boss", event: "Office" },
+    });
+    expect(looks.statusCode).toBe(200);
+    const body = looks.json<{ looks: { role: string; imageUrl: string }[] }>();
+    const statement = body.looks.find((l) => l.role === "statement");
+    expect(statement).toBeTruthy();
+    const svg = Buffer.from(statement!.imageUrl.split(",")[1]!, "base64").toString("utf8");
+    expect(svg).toContain('data-skin="1"');
+    expect(svg).toContain("300.0,250.0");
+    expect(svg).toContain('data-shift="1.00"');
+  });
+
   it("rejects a bad category", async () => {
     const { sessionId } = await makeSession(app);
     const res = await runFace(app, sessionId, {

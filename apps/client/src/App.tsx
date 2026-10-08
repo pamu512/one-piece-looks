@@ -127,6 +127,7 @@ export default function App() {
           ...(typeof landmarks.lipMeanL === "number" && Number.isFinite(landmarks.lipMeanL) ? { lipMeanL: landmarks.lipMeanL } : {}),
           ...(typeof landmarks.lipMeanA === "number" && Number.isFinite(landmarks.lipMeanA) ? { lipMeanA: landmarks.lipMeanA } : {}),
           ...(typeof landmarks.lipMeanB === "number" && Number.isFinite(landmarks.lipMeanB) ? { lipMeanB: landmarks.lipMeanB } : {}),
+          ...(landmarks.skin ? { skin: landmarks.skin as [number, number][] } : {}),
           eyeL: landmarks.eyeL as [number, number][],
           eyeR: landmarks.eyeR as [number, number][],
           browL: landmarks.browL as [number, number][],

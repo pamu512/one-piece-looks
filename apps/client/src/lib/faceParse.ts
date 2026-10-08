@@ -25,6 +25,7 @@ export const LIP_POINT_COUNT = 64;
 const MEAN = [0.485, 0.456, 0.406] as const;
 const STD = [0.229, 0.224, 0.225] as const;
 const CLASSES = 19;
+const SKIN = 1;
 const MOUTH = 11;
 const UPPER_LIP = 12;
 const LOWER_LIP = 13;
@@ -59,6 +60,8 @@ export interface ParsedLips {
   lipMeanA: number;
   /** CIE b* of those same pixels, -128..127. */
   lipMeanB: number;
+  /** Class-1 skin contour in frame-normalized coords. Omitted when the class is absent. */
+  skin?: Array<[number, number]> | undefined;
 }
 
 type OrtSession = import("onnxruntime-web").InferenceSession;
@@ -287,16 +290,14 @@ export function meanLipFleshLab(
       const [r, g, b] = rgbAt(x, y);
       if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) continue;
       const lab = cieLab(r, g, b);
-      sumL += lab.L;
-      sumA += lab.a;
-      sumB += lab.b;
+      sumL += lab.L; sumA += lab.a; sumB += lab.b;
       n += 1;
     }
   }
   if (n < 8) return null;
-  const mean = { L: sumL / n, a: sumA / n, b: sumB / n };
-  if (![mean.L, mean.a, mean.b].every(Number.isFinite)) return null;
-  return clampLipMean(mean);
+  const meanL = sumL / n, meanA = sumA / n, meanB = sumB / n;
+  if (![meanL, meanA, meanB].every(Number.isFinite)) return null;
+  return clampLipMean({ L: meanL, a: meanA, b: meanB });
 }
 
 export function meanLipFleshL(
@@ -350,6 +351,125 @@ function largestComponent(field: Float32Array, size: number, thr: number): Float
   if (bestLabel < 0) return out;
   for (let i = 0; i < n; i++) if (label[i] === bestLabel) out[i] = field[i] ?? 0;
   return out;
+}
+
+/**
+ * Core plus the ramp on cells that touch it. A binary core is a step, so a
+ * threshold under 0.5 cannot move. Keeping the shoulder lets a thin lip's
+ * iso sit on the outer probability, not one cell inside it.
+ */
+function shoulderField(ramp: Float32Array, core: Float32Array, size: number, coreThr: number, radius = 1): Float32Array {
+  const n = size * size;
+  const rad = radius < 1 ? 1 : radius;
+  const out = new Float32Array(n);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if ((core[i] ?? 0) >= coreThr) {
+        out[i] = ramp[i] ?? 0;
+        continue;
+      }
+      let near = false;
+      for (let dy = -rad; dy <= rad && !near; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= size) continue;
+        for (let dx = -rad; dx <= rad; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= size) continue;
+          if ((core[yy * size + xx] ?? 0) >= coreThr) { near = true; break; }
+        }
+      }
+      if (near) out[i] = ramp[i] ?? 0;
+    }
+  }
+  return out;
+}
+
+/**
+ * Lift the lower lip and the mouth corners onto the iso.
+ *
+ * Cells within `radius` of the core that still read as lip (ramp at
+ * least 0.4, and at least the trace level when that is lower) are
+ * stored at the core level, so the iso includes them. A hard edge is
+ * near 0 and is left alone. The upper lip is not touched: a contour
+ * that already meets the vermillion must not grow past it.
+ * Returns true when a cell that was outside the iso is pulled in.
+ */
+function extendLowerLip(
+  field: Float32Array,
+  ramp: Float32Array,
+  core: Float32Array,
+  size: number,
+  coreThr: number,
+  traceThr: number,
+  radius: number,
+): boolean {
+  if (!(size >= 2) || field.length < size * size || ramp.length < size * size || core.length < size * size) return false;
+  let minX = size, maxX = -1, minY = size, maxY = -1;
+  for (let y = 0; y < size; y++) {
+    const row = y * size;
+    for (let x = 0; x < size; x++) {
+      if ((core[row + x] ?? 0) < coreThr) continue;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return false;
+  const midY = (minY + maxY) / 2;
+  const cornerX = Math.max(1, (maxX - minX + 1) * 0.18);
+  const rad = !Number.isFinite(radius) || radius < 1 ? 1 : Math.min(8, Math.floor(radius));
+  const floor = Math.min(traceThr, 0.4);
+  let grew = false;
+  for (let y = 0; y < size; y++) {
+    const row = y * size;
+    for (let x = 0; x < size; x++) {
+      const i = row + x;
+      const v = ramp[i] ?? 0;
+      if (!(v >= floor)) continue;
+      const lower = y >= midY;
+      const corner = x <= minX + cornerX || x >= maxX - cornerX;
+      if (!lower && !corner) continue;
+      const before = field[i] ?? 0;
+      const next = Math.max(v, coreThr);
+      if (before >= next - 1e-6) continue;
+      let close = false;
+      for (let dy = -rad; dy <= rad && !close; dy++) {
+        const yy = y + dy;
+        if (yy < 0 || yy >= size) continue;
+        const rrow = yy * size;
+        for (let dx = -rad; dx <= rad; dx++) {
+          const xx = x + dx;
+          if (xx < 0 || xx >= size) continue;
+          if ((core[rrow + xx] ?? 0) >= coreThr) { close = true; break; }
+        }
+      }
+      if (!close) continue;
+      field[i] = next;
+      if (before < traceThr) grew = true;
+    }
+  }
+  return grew;
+}
+
+/**
+ * One-cell shoulder, then extendLowerLip. A tiny upsampled mouth falls
+ * off over more than one cell on the lower lip and at the corners,
+ * sometimes just under the iso. The upper lip stays on the one-cell
+ * shoulder.
+ */
+function lipReachField(
+  ramp: Float32Array,
+  core: Float32Array,
+  size: number,
+  coreThr: number,
+  traceThr: number,
+  radius: number,
+): { field: Float32Array; grew: boolean } {
+  const field = shoulderField(ramp, core, size, coreThr, 1);
+  const grew = extendLowerLip(field, ramp, core, size, coreThr, traceThr, radius);
+  return { field, grew };
 }
 
 type Pt = [number, number];
@@ -438,8 +558,123 @@ function resampleClosed(poly: readonly Pt[], count: number): Pt[] | null {
   return out;
 }
 
+function boxOf(poly: readonly Pt[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (poly.length === 0) return null;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of poly) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  if (!Number.isFinite(minX)) return null;
+  return { minX, minY, maxX, maxY };
+}
+
+/** Put a smoothed loop back out to the pre-smooth box. Never shrinks. */
+function expandBoxTo(src: readonly Pt[], dst: readonly Pt[]): Pt[] {
+  const a = boxOf(src);
+  const b = boxOf(dst);
+  if (!a || !b) return dst.map((p) => [p[0], p[1]]);
+  const bw = b.maxX - b.minX;
+  const bh = b.maxY - b.minY;
+  if (!(bw > 1e-6 && bh > 1e-6)) return dst.map((p) => [p[0], p[1]]);
+  const sx = Math.max(1, (a.maxX - a.minX) / bw);
+  const sy = Math.max(1, (a.maxY - a.minY) / bh);
+  const cx = (b.minX + b.maxX) / 2;
+  const cy = (b.minY + b.maxY) / 2;
+  return dst.map(([x, y]) => [cx + (x - cx) * sx, cy + (y - cy) * sy]);
+}
+
+function fieldSpan(field: Float32Array, size: number, thr: number): number {
+  let minX = size, minY = size, maxX = -1, maxY = -1;
+  for (let y = 0; y < size; y++) {
+    const row = y * size;
+    for (let x = 0; x < size; x++) {
+      if ((field[row + x] ?? 0) < thr) continue;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return 99;
+  return Math.min(maxX - minX + 1, maxY - minY + 1);
+}
+
+function loopCentroid(poly: readonly Pt[]): Pt {
+  let sx = 0, sy = 0;
+  for (const p of poly) { sx += p[0]; sy += p[1]; }
+  const n = poly.length || 1;
+  return [sx / n, sy / n];
+}
+
+/** Farthest forward hit of the ray origin -> through against a closed loop. */
+function rayExit(origin: Pt, through: Pt, poly: readonly Pt[]): Pt | null {
+  const dx = through[0] - origin[0];
+  const dy = through[1] - origin[1];
+  if (!(Math.hypot(dx, dy) > 1e-6)) return null;
+  let bestT = 0;
+  let best: Pt | null = null;
+  const n = poly.length;
+  for (let i = 0; i < n; i++) {
+    const a = poly[i]!, b = poly[(i + 1) % n]!;
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    const den = dx * ey - dy * ex;
+    if (Math.abs(den) < 1e-12) continue;
+    const ax = a[0] - origin[0], ay = a[1] - origin[1];
+    const t = (ax * ey - ay * ex) / den;
+    const u = (ax * dy - ay * dx) / den;
+    if (t < 0.999 || u < -1e-4 || u > 1 + 1e-4) continue;
+    if (t > bestT) {
+      bestT = t;
+      best = [origin[0] + dx * t, origin[1] + dy * t];
+    }
+  }
+  return best;
+}
+
+/**
+ * Chaikin pulls a newly included lower band back inside. Put lower-lip
+ * and corner vertices back on the pre-smooth loop. Upper-lip vertices
+ * keep the smooth, so a lip that already meets the top edge stays there.
+ */
+function restoreLowerCorners(raw: readonly Pt[], smoothed: readonly Pt[]): Pt[] {
+  const box = boxOf(raw);
+  if (!box || smoothed.length === 0 || raw.length < 3) return smoothed.map((p) => [p[0], p[1]]);
+  const midY = (box.minY + box.maxY) / 2;
+  const cornerX = Math.max(1, (box.maxX - box.minX) * 0.18);
+  const origin = loopCentroid(raw);
+  if (!pointInPoly(origin[0], origin[1], raw)) return smoothed.map((p) => [p[0], p[1]]);
+  return smoothed.map((p) => {
+    const lower = p[1] >= midY;
+    const corner = p[0] <= box.minX + cornerX || p[0] >= box.maxX - cornerX;
+    if (!lower && !corner) return [p[0], p[1]] as Pt;
+    if (!pointInPoly(p[0], p[1], raw)) return [p[0], p[1]] as Pt;
+    return rayExit(origin, p, raw) ?? [p[0], p[1]];
+  });
+}
+
+/**
+ * Iso level for the outer lip. A lip only a few cells tall is traced
+ * toward the outer shoulder so smoothing does not leave it inside the flesh.
+ */
+function lipTraceThreshold(minor: number): number {
+  if (minor >= 18) return ISO;
+  // 0.42 on the ramp is lip probability about 0.52, just outside the old 0.55 shoulder.
+  if (minor <= 6) return 0.42;
+  return 0.42 + ((minor - 6) / 12) * (ISO - 0.42);
+}
+
 /** 0.5 iso-contour of the largest loop, smoothed, resampled to LIP_POINT_COUNT. */
-function traceIso(field: Float32Array, size: number, thr: number): Pt[] | null {
+function traceIso(
+  field: Float32Array,
+  size: number,
+  thr: number,
+  passes = 2,
+  keepBox = false,
+  restoreLower = false,
+): Pt[] | null {
   // Zero halo: a component that touches the crop edge still has a closed loop.
   const ps = size + 2;
   const padded = new Float32Array(ps * ps);
@@ -516,7 +751,11 @@ function traceIso(field: Float32Array, size: number, thr: number): Pt[] | null {
   }
   if (!best || best.length < 8) return null;
   const shifted = best.map(([x, y]) => [x - 1, y - 1] as Pt);
-  const smooth = chaikinClosed(chaikinClosed(shifted));
+  let smooth = shifted;
+  const nPass = passes > 0 ? passes : 0;
+  for (let i = 0; i < nPass; i++) smooth = chaikinClosed(smooth);
+  if (keepBox) smooth = expandBoxTo(shifted, smooth);
+  if (restoreLower) smooth = restoreLowerCorners(shifted, smooth);
   return resampleClosed(smooth, LIP_POINT_COUNT);
 }
 
@@ -602,8 +841,31 @@ export function lipsFromClassProbs(
     if (r >= ISO && m < ISO) lipPx += 1;
   }
   if (!lipFractionPlausible(lipPx, n)) return null;
-  const lipField = largestComponent(ramp, size, ISO);
-  const lipGrid = traceIso(lipField, size, ISO);
+  const lipCore = largestComponent(ramp, size, ISO);
+  const minor = fieldSpan(lipCore, size, ISO);
+  const thinLip = minor < 18;
+  const thr = lipTraceThreshold(minor);
+  let lipField = lipCore;
+  let passes = 2;
+  let restoreLower = false;
+  if (thinLip) {
+    const reached = lipReachField(ramp, lipCore, size, ISO, thr, 3);
+    lipField = reached.field;
+    // Chaikin on a lip only a few cells tall cuts the corners back
+    // inside the flesh. A taller thin lip keeps one pass unless the
+    // reach actually added the lower band.
+    passes = reached.grew || minor < 12 ? 0 : 1;
+  } else {
+    const field = new Float32Array(lipCore);
+    // A mouth that is not tiny can still lose the lower band when the
+    // source was scaled up and the iso sits inside the flesh. Same
+    // reach, without lowering the iso on the upper lip.
+    if (extendLowerLip(field, ramp, lipCore, size, ISO, thr, 3)) {
+      lipField = field;
+      restoreLower = true;
+    }
+  }
+  const lipGrid = traceIso(lipField, size, thr, passes, thinLip, restoreLower);
   if (!lipGrid) return null;
   const lip = lipGrid.map(([gx, gy]) => clampWire(gridToFrameNorm(gx, gy, crop, frameW, frameH, size)));
   if (lip.length < 32) return null;
@@ -613,18 +875,17 @@ export function lipsFromClassProbs(
     for (let x = 0; x < size; x++) {
       const i = y * size + x;
       if ((ramp[i] ?? 0) < ISO || (mouth[i] ?? 0) >= ISO) continue;
-      if ((lipField[i] ?? 0) < ISO) continue;
+      if ((lipCore[i] ?? 0) < ISO) continue;
       const [r, g, b] = rgbAt(x, y);
       if (!Number.isFinite(r) || !Number.isFinite(g) || !Number.isFinite(b)) continue;
       const lab = cieLab(r, g, b);
-      sumL += lab.L;
-      sumA += lab.a;
-      sumB += lab.b;
+      sumL += lab.L; sumA += lab.a; sumB += lab.b;
       nL += 1;
     }
   }
   if (nL < 8) return null;
-  const lipMean = clampLipMean({ L: sumL / nL, a: sumA / nL, b: sumB / nL });
+  const meanL = sumL / nL, meanA = sumA / nL, meanB = sumB / nL;
+  const lipMean = clampLipMean({ L: meanL, a: meanA, b: meanB });
   if (![lipMean.L, lipMean.a, lipMean.b].every(Number.isFinite)) return null;
 
   let lipInner: Array<[number, number]> | undefined;
@@ -648,15 +909,41 @@ export function lipsFromClassProbs(
       }
     }
   }
-  const means = { lipMeanL: lipMean.L, lipMeanA: lipMean.a, lipMeanB: lipMean.b };
-  return lipInner ? { lip, lipInner, ...means } : { lip, ...means };
+  let skin: Array<[number, number]> | undefined;
+  const skinField = new Float32Array(n);
+  let skinPx = 0;
+  for (let i = 0; i < n; i++) {
+    const s = probs[SKIN * n + i] ?? 0;
+    skinField[i] = s;
+    if (s >= ISO) skinPx += 1;
+  }
+  if (skinPx >= 24) {
+    const skinGrid = traceIso(largestComponent(skinField, size, ISO), size, ISO, 2, true);
+    if (skinGrid && skinGrid.length >= 12) {
+      skin = skinGrid.map(([gx, gy]) => clampWire(gridToFrameNorm(gx, gy, crop, frameW, frameH, size)));
+    }
+  }
+  const means = {
+    lipMeanL: lipMean.L,
+    lipMeanA: lipMean.a,
+    lipMeanB: lipMean.b,
+  };
+  return skin
+    ? (lipInner ? { lip, lipInner, skin, ...means } : { lip, skin, ...means })
+    : (lipInner ? { lip, lipInner, ...means } : { lip, ...means });
 }
 
 /** Heuristic landmarks when parsing fails. Parsed lips replace the redness polygon. */
 export function lipsOrHeuristic<T extends { lip: Poly }>(
   heuristic: T,
   parsed: ParsedLips | null,
-): T & { lipInner?: Poly | undefined; lipMeanL?: number | undefined; lipMeanA?: number | undefined; lipMeanB?: number | undefined } {
+): T & {
+  lipInner?: Poly | undefined;
+  lipMeanL?: number | undefined;
+  lipMeanA?: number | undefined;
+  lipMeanB?: number | undefined;
+  skin?: Poly | undefined;
+} {
   if (!parsed) return heuristic;
   const next = {
     ...heuristic,
@@ -664,9 +951,17 @@ export function lipsOrHeuristic<T extends { lip: Poly }>(
     lipMeanL: parsed.lipMeanL,
     lipMeanA: parsed.lipMeanA,
     lipMeanB: parsed.lipMeanB,
-  } as T & { lipInner?: Poly | undefined; lipMeanL?: number | undefined; lipMeanA?: number | undefined; lipMeanB?: number | undefined };
+  } as T & {
+    lipInner?: Poly | undefined;
+    lipMeanL?: number | undefined;
+    lipMeanA?: number | undefined;
+    lipMeanB?: number | undefined;
+    skin?: Poly | undefined;
+  };
   delete next.lipInner;
+  delete next.skin;
   if (parsed.lipInner) next.lipInner = parsed.lipInner;
+  if (parsed.skin) next.skin = parsed.skin;
   return next;
 }
 

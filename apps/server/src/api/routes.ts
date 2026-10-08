@@ -102,6 +102,7 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
     ...(lipMeanL !== undefined ? { lipMeanL } : {}),
     ...(lipMeanA !== undefined ? { lipMeanA } : {}),
     ...(lipMeanB !== undefined ? { lipMeanB } : {}),
+    ...(poly(r.skin) ? { skin: poly(r.skin) } : {}),
     ...(poly(r.eyeL) ? { eyeL: poly(r.eyeL) } : {}),
     ...(poly(r.eyeR) ? { eyeR: poly(r.eyeR) } : {}),
     ...(poly(r.browL) ? { browL: poly(r.browL) } : {}),

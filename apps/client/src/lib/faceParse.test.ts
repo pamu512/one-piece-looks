@@ -212,6 +212,291 @@ test("a closed mouth omits lipInner, and a mouth blob outside the lip is not use
   assert.equal(dropped.lipInner, undefined);
 });
 
+test("a thin lip contour reaches the field and a skin class stays off the hair", () => {
+  const size = 64;
+  const box = { x: 0.3, y: 0.2, w: 0.4, h: 0.5 };
+  const frameW = 1000, frameH = 1250;
+  const crop = squareCropForBox(box, frameW, frameH);
+  assert.ok(crop);
+  const n = size * size;
+  const probs = new Float32Array(19 * n);
+  const cx = (size - 1) / 2, cy = cx;
+  const lipRx = 16, lipRy = 3;
+  const skinRx = 22, skinRy = 26;
+  let minFX = size, minFY = size, maxFX = -1, maxFY = -1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (inEllipse(x, y, cx, cy, lipRx, lipRy)) {
+        probs[12 * n + i] = 0.7;
+        probs[13 * n + i] = 0.25;
+        probs[0 * n + i] = 0.05;
+        if (x < minFX) minFX = x;
+        if (y < minFY) minFY = y;
+        if (x > maxFX) maxFX = x;
+        if (y > maxFY) maxFY = y;
+      } else if (inEllipse(x, y, cx, cy, skinRx, skinRy)) {
+        probs[1 * n + i] = 0.92;
+        probs[0 * n + i] = 0.08;
+      } else {
+        probs[14 * n + i] = 0.9;
+        probs[0 * n + i] = 0.1;
+      }
+    }
+  }
+  const parsed = lipsFromClassProbs(probs, size, crop, frameW, frameH, () => [160, 70, 70]);
+  assert.ok(parsed);
+  const grid = parsed.lip.map(([x, y]) => {
+    const px = x * frameW, py = y * frameH;
+    return framePxToGrid(px, py, crop, size);
+  });
+  let minY = Infinity, maxY = -Infinity, minX = Infinity, maxX = -Infinity;
+  for (const [x, y] of grid) {
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+  }
+  const fieldH = maxFY - minFY + 1;
+  const fieldW = maxFX - minFX + 1;
+  assert.ok(maxY - minY >= fieldH * 0.85, `contour height ${maxY - minY} vs field ${fieldH}`);
+  assert.ok(maxX - minX >= fieldW * 0.85, `contour width ${maxX - minX} vs field ${fieldW}`);
+  assert.ok(maxY - minY <= fieldH + 2.5, `contour taller than the field by ${maxY - minY - fieldH}`);
+  assert.ok(maxX - minX <= fieldW + 2.5, `contour wider than the field by ${maxX - minX - fieldW}`);
+  assert.ok(parsed.skin);
+  assert.ok(parsed.skin.length >= 12);
+  assert.ok(parsed.skin.length <= 80);
+  const hair: [number, number] = [0.02, 0.02];
+  assert.equal(pointInPoly(hair[0], hair[1], parsed.skin), false);
+  assert.ok(Number.isFinite(parsed.lipMeanL));
+  assert.ok(Number.isFinite(parsed.lipMeanA));
+  assert.ok(Number.isFinite(parsed.lipMeanB));
+});
+
+test("a thin lip traces the soft shoulder outside the hard core", () => {
+  const size = 64;
+  const crop = { x: 40, y: 40, size: 640 };
+  const frameW = 640, frameH = 640;
+  const n = size * size;
+  const probs = new Float32Array(19 * n);
+  const cx = (size - 1) / 2, cy = cx;
+  let coreMinY = size, coreMaxY = -1, softMinY = size, softMaxY = -1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const core = inEllipse(x, y, cx, cy, 14, 2);
+      const soft = inEllipse(x, y, cx, cy, 16, 3.6);
+      if (core) {
+        probs[12 * n + i] = 0.7;
+        probs[13 * n + i] = 0.25;
+        if (y < coreMinY) coreMinY = y;
+        if (y > coreMaxY) coreMaxY = y;
+      } else if (soft) {
+        // ramp about 0.47: outside the 0.5 core, inside the 0.42 iso
+        probs[12 * n + i] = 0.32;
+        probs[13 * n + i] = 0.22;
+        if (y < softMinY) softMinY = y;
+        if (y > softMaxY) softMaxY = y;
+      } else {
+        probs[i] = 1;
+      }
+    }
+  }
+  const parsed = lipsFromClassProbs(probs, size, crop, frameW, frameH, () => [160, 70, 70]);
+  assert.ok(parsed);
+  const grid = parsed.lip.map(([x, y]) => framePxToGrid(x * frameW, y * frameH, crop, size));
+  let minY = Infinity, maxY = -Infinity;
+  for (const [, y] of grid) {
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const coreH = coreMaxY - coreMinY + 1;
+  const softH = Math.max(coreMaxY, softMaxY) - Math.min(coreMinY, softMinY) + 1;
+  const span = maxY - minY;
+  assert.ok(span >= coreH + 0.5, `contour ${span} should clear the core ${coreH}`);
+  assert.ok(span <= softH + 2.5, `contour ${span} past the shoulder field ${softH}`);
+});
+
+/** Core plus the cells one and two steps outside it. */
+function lipRings(size: number, cx: number, cy: number, rx: number, ry: number): {
+  core: Uint8Array;
+  ring1: Uint8Array;
+  ring2: Uint8Array;
+} {
+  const n = size * size;
+  const core = new Uint8Array(n);
+  const ring1 = new Uint8Array(n);
+  const ring2 = new Uint8Array(n);
+  const touch = (mask: Uint8Array, x: number, y: number): boolean => {
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= size) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const xx = x + dx;
+        if (xx < 0 || xx >= size) continue;
+        if (mask[yy * size + xx]) return true;
+      }
+    }
+    return false;
+  };
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (inEllipse(x, y, cx, cy, rx, ry)) core[y * size + x] = 1;
+    }
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (!core[y * size + x] && touch(core, x, y)) ring1[y * size + x] = 1;
+    }
+  }
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (!core[i] && !ring1[i] && touch(ring1, x, y)) ring2[i] = 1;
+    }
+  }
+  return { core, ring1, ring2 };
+}
+
+test("a tiny mouth covers the lower-lip band and the corners", () => {
+  const size = 64;
+  const crop = { x: 20, y: 20, size: 400 };
+  const frameW = 640, frameH = 640;
+  const n = size * size;
+  const probs = new Float32Array(19 * n);
+  const cx = (size - 1) / 2, cy = cx;
+  const { core, ring1, ring2 } = lipRings(size, cx, cy, 8, 2.2);
+  let ring2MaxY = -1, ring2MinX = size, ring2MaxX = -1, coreMaxY = -1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      const lower = y >= cy;
+      const corner = x <= cx - 6 || x >= cx + 6;
+      if (core[i]) {
+        probs[12 * n + i] = 0.72;
+        probs[13 * n + i] = 0.24;
+        if (y > coreMaxY) coreMaxY = y;
+      } else if (ring1[i]) {
+        probs[12 * n + i] = 0.34;
+        probs[13 * n + i] = 0.202;
+      } else if (ring2[i] && (lower || corner)) {
+        probs[12 * n + i] = 0.32;
+        probs[13 * n + i] = 0.206;
+        if (y > ring2MaxY) ring2MaxY = y;
+        if (x < ring2MinX) ring2MinX = x;
+        if (x > ring2MaxX) ring2MaxX = x;
+      } else {
+        probs[i] = 1;
+      }
+    }
+  }
+  const parsed = lipsFromClassProbs(probs, size, crop, frameW, frameH, () => [160, 70, 70]);
+  assert.ok(parsed);
+  const grid = parsed.lip.map(([x, y]) => framePxToGrid(x * frameW, y * frameH, crop, size));
+  let minX = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of grid) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  assert.ok(maxY >= ring2MaxY - 0.25, `bottom ${maxY} short of the lower band ${ring2MaxY}`);
+  assert.ok(minX <= ring2MinX + 0.85, `left corner ${minX} inside ${ring2MinX}`);
+  assert.ok(maxX >= ring2MaxX - 0.85, `right corner ${maxX} inside ${ring2MaxX}`);
+  assert.ok(maxY > coreMaxY + 1, `bottom ${maxY} still on the core ${coreMaxY}`);
+  const corner: [number, number] = [ring2MinX + 0.5, cy];
+  assert.equal(pointInPoly(corner[0], corner[1], grid), true);
+});
+
+test("a wide mouth paints the lower band and the corners and leaves the upper lip on the core", () => {
+  const size = 96;
+  const crop = { x: 20, y: 20, size: 800 };
+  const frameW = 1000, frameH = 1000;
+  const n = size * size;
+  const probs = new Float32Array(19 * n);
+  const cx = (size - 1) / 2, cy = cx;
+  const { core, ring1, ring2 } = lipRings(size, cx, cy, 20, 10);
+  let ring2MaxY = -1, ring2MinX = size, coreMinY = size, coreMaxY = -1, upperTop = size;
+  let coreW = 0, coreH = 0;
+  let minCX = size, maxCX = -1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (core[i]) {
+        probs[12 * n + i] = 0.72;
+        probs[13 * n + i] = 0.24;
+        if (y < coreMinY) coreMinY = y;
+        if (y > coreMaxY) coreMaxY = y;
+        if (x < minCX) minCX = x;
+        if (x > maxCX) maxCX = x;
+      } else if (ring1[i] || ring2[i]) {
+        // ramp 0.45: under the 0.5 iso, over the 0.4 reach floor
+        probs[12 * n + i] = 0.33;
+        probs[13 * n + i] = 0.20;
+        if (y >= cy && y > ring2MaxY) ring2MaxY = y;
+        if (ring2[i] && x < ring2MinX) ring2MinX = x;
+        if (y < cy && Math.abs(x - cx) <= 4 && y < upperTop) upperTop = y;
+      } else {
+        probs[i] = 1;
+      }
+    }
+  }
+  coreW = maxCX - minCX + 1;
+  coreH = coreMaxY - coreMinY + 1;
+  assert.ok(Math.min(coreW, coreH) >= 18, `fixture minor ${Math.min(coreW, coreH)} is on the thin path`);
+  assert.ok(ring2MaxY > cy, `lower band missing (${ring2MaxY})`);
+  assert.ok(upperTop < cy - 1, `upper halo missing (${upperTop})`);
+  const parsed = lipsFromClassProbs(probs, size, crop, frameW, frameH, () => [160, 70, 70]);
+  assert.ok(parsed);
+  const grid = parsed.lip.map(([x, y]) => framePxToGrid(x * frameW, y * frameH, crop, size));
+  let maxY = -Infinity;
+  for (const [, y] of grid) if (y > maxY) maxY = y;
+  assert.ok(maxY >= ring2MaxY - 0.9, `bottom ${maxY} short of the lower band ${ring2MaxY}`);
+  assert.equal(pointInPoly(ring2MinX + 0.5, cy, grid), true, "left corner is inside the paint");
+  assert.equal(pointInPoly(cx, upperTop + 0.5, grid), false, "upper halo was pulled into the paint");
+  let topCenter = Infinity;
+  for (const [x, y] of grid) {
+    if (Math.abs(x - cx) <= 4 && y < topCenter) topCenter = y;
+  }
+  assert.ok(Number.isFinite(topCenter), "no upper-center vertex");
+  assert.ok(topCenter >= coreMinY - 1.2, `upper lip ${topCenter} left the core ${coreMinY}`);
+});
+
+test("a thick lip stays on the core when a soft halo sits outside it", () => {
+  const size = 96;
+  const crop = { x: 10, y: 10, size: 800 };
+  const frameW = 1000, frameH = 1000;
+  const n = size * size;
+  const probs = new Float32Array(19 * n);
+  const cx = (size - 1) / 2, cy = cx;
+  const { core, ring1, ring2 } = lipRings(size, cx, cy, 14, 11);
+  let coreMaxY = -1, ring2MaxY = -1;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x;
+      if (core[i]) {
+        probs[12 * n + i] = 0.72;
+        probs[13 * n + i] = 0.24;
+        if (y > coreMaxY) coreMaxY = y;
+      } else if (ring1[i] || ring2[i]) {
+        probs[12 * n + i] = 0.32;
+        probs[13 * n + i] = 0.18;
+        if (ring2[i] && y > ring2MaxY) ring2MaxY = y;
+      } else {
+        probs[i] = 1;
+      }
+    }
+  }
+  const parsed = lipsFromClassProbs(probs, size, crop, frameW, frameH, () => [160, 70, 70]);
+  assert.ok(parsed);
+  const grid = parsed.lip.map(([x, y]) => framePxToGrid(x * frameW, y * frameH, crop, size));
+  let maxY = -Infinity;
+  for (const [, y] of grid) if (y > maxY) maxY = y;
+  assert.ok(ring2MaxY >= coreMaxY + 2, `halo ${ring2MaxY} is not outside the core ${coreMaxY}`);
+  assert.ok(maxY <= coreMaxY + 1.6, `thick contour ${maxY} grew past the core ${coreMaxY}`);
+  assert.ok(maxY < ring2MaxY - 0.5, `thick contour ${maxY} reached the halo ${ring2MaxY}`);
+});
+
 test("an implausible speck falls back to the heuristic lip", () => {
   const size = 64;
   const probs = new Float32Array(19 * size * size);

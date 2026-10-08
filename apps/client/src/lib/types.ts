@@ -98,6 +98,8 @@ export interface FaceLandmarksPayload {
   lipMeanA?: number;
   /** CIE b* of the lip flesh, -128..127. */
   lipMeanB?: number;
+  /** Class-1 skin contour. */
+  skin?: [number, number][];
   eyeL?: [number, number][];
   eyeR?: [number, number][];
   browL?: [number, number][];

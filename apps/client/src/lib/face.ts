@@ -53,6 +53,8 @@ export interface FaceLandmarks {
   lipMeanA?: number | undefined;
   /** Mean CIE b* of the lip flesh, -128..127. The mouth hole is not included. */
   lipMeanB?: number | undefined;
+  /** Class-1 skin contour. The card falls back to the face oval when this is absent. */
+  skin?: Poly | undefined;
   eyeL: Poly;
   eyeR: Poly;
   browL: Poly;
