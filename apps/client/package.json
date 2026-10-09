@@ -10,6 +10,7 @@
     "test": "tsc -b --pretty false && node --experimental-strip-types --test src/lib/*.test.ts"
   },
   "dependencies": {
+    "@mediapipe/tasks-vision": "^1.1.0",
     "onnxruntime-web": "^1.30.0",
     "react": "19.3.0",
     "react-dom": "19.3.0"

@@ -30,6 +30,7 @@ import {
 } from "./faceFrame";
 import { detectFaceFrameModel } from "./faceModel";
 import { lipsOrHeuristic, meanLipFleshLab, parseLips } from "./faceParse";
+import { detectFaceWithMesh } from "./faceMesh";
 
 /** WFLW eye band midpoint (test split): fallback eye height inside faceBox. */
 const EYE_FALLBACK_Y = (EYE_BAND.y0 + EYE_BAND.y1) / 2;
@@ -320,11 +321,15 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
 }
 
 /**
- * Async model path. Awaits the YOLO box, then the BiSeNet lip parse.
- * Heuristic lips (and their lip means) stay only when the parser fails
- * to load, throws, or returns an implausible lip area. Never rejects.
+ * Async model path. Priority ladder (all optional, never rejects):
+ *   1. MediaPipe 478-point mesh (license-clean, full-face rings; the
+ *      bedhead-grade geometry) - wins when the landmarker loads.
+ *   2. YOLO faceBox + BiSeNet lip parse (non-commercial weights).
+ *   3. Heuristic: skin-grid box + redness lip (dependency-free floor).
  */
 export async function detectFaceWithModel(canvas: HTMLCanvasElement): Promise<FaceLandmarks | null> {
+  const mesh = await detectFaceWithMesh(canvas);
+  if (mesh) return mesh;
   const model = await detectFaceFrameModel(canvas).catch(() => null);
   const base = detectFace(canvas, model);
   if (!base || !model) return base;
@@ -383,14 +388,40 @@ export function suggestLock(
     { cat: "eye", poly: lm.eyeL },
     { cat: "eye", poly: lm.eyeR },
   ];
+  /**
+   * Sample point for a zone. The lip ring's centroid can land on a specular
+   * highlight (measured: centroid score 0.37 vs 0.78 on the y-quartile bands
+   * of the same ring), and a fixed midpoint still averages skin when the
+   * bands are thin. The lip therefore probes three rows - centroid, 25th and
+   * 75th percentile bands - and the caller keeps the most saturated sample:
+   * the zone suggestion asks for the strongest color the face shows, so max
+   * over the ring's own rows is the honest read. Other zones use the centroid.
+   */
+  const samplePoints = (cat: Cand["cat"], poly: Poly): Array<[number, number]> => {
+    const [cx, cy] = centroid(poly);
+    if (cat !== "lip" || poly.length < 8) return [[cx, cy]];
+    const ys = poly.map(([, y]) => y).sort((a, b) => a - b);
+    const upper = ys[Math.floor(ys.length * 0.25)]!;
+    const lower = ys[Math.floor(ys.length * 0.75)]!;
+    return [[cx, cy], [cx, upper], [cx, lower]];
+  };
   for (const z of zones) {
-    const [cx, cy] = centroid(z.poly);
-    const rgb = patchMean(ctx, cx, cy, 6);
-    const [, sat, val] = rgbToHsv(...rgb);
-    // Color presence: saturation that survives a brightness floor, so
-    // near-black pixels (sat ~1, v ~0) don't masquerade as vivid color.
-    const score = sat * Math.min(1, val / 0.35);
-    cands.push({ cat: z.cat, pt: [cx, cy], score, rgb });
+    const pts = samplePoints(z.cat, z.poly);
+    let best: Cand | null = null;
+    for (const pt of pts) {
+      const rgb = patchMean(ctx, pt[0], pt[1], 5);
+      const [, sat, val] = rgbToHsv(...rgb);
+      // Color presence: saturation that survives a brightness floor, so
+      // near-black pixels (sat ~1, v ~0) don't masquerade as vivid color.
+      const score = sat * Math.min(1, val / 0.35);
+      if (!best || score > best.score) best = { cat: z.cat, pt, score, rgb };
+    }
+    // Lip leads: the product's primary zone. A bare lip still outscores a
+    // bare cheek on most faces, but on pale/desaturated lips the cheek can
+    // win on scatter alone - a small lip bonus keeps the default tap on the
+    // mouth (one tap to move it either way).
+    const lipBonus = z.cat === "lip" ? 0.06 : 0;
+    cands.push({ ...best!, score: best!.score + lipBonus });
   }
   cands.sort((a, b) => b.score - a.score);
   const top = cands[0];
