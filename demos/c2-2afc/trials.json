@@ -1,0 +1,184 @@
+{
+  "trials": [
+    {
+      "id": 0,
+      "left": "renders/r8055548bff63019a.png",
+      "right": "renders/r1149814cbe191feb.png"
+    },
+    {
+      "id": 1,
+      "left": "renders/r1149814cbe191feb.png",
+      "right": "renders/r8055548bff63019a.png"
+    },
+    {
+      "id": 2,
+      "left": "renders/r1149814cbe191feb.png",
+      "right": "renders/r8055548bff63019a.png"
+    },
+    {
+      "id": 3,
+      "left": "renders/r80c8ea02860d5b0d.png",
+      "right": "renders/r8055548bff63019a.png"
+    },
+    {
+      "id": 4,
+      "left": "renders/r8055548bff63019a.png",
+      "right": "renders/r80c8ea02860d5b0d.png"
+    },
+    {
+      "id": 5,
+      "left": "renders/r80c8ea02860d5b0d.png",
+      "right": "renders/r8055548bff63019a.png"
+    },
+    {
+      "id": 6,
+      "left": "renders/r80c8ea02860d5b0d.png",
+      "right": "renders/r1149814cbe191feb.png"
+    },
+    {
+      "id": 7,
+      "left": "renders/r1149814cbe191feb.png",
+      "right": "renders/r80c8ea02860d5b0d.png"
+    },
+    {
+      "id": 8,
+      "left": "renders/r80c8ea02860d5b0d.png",
+      "right": "renders/r1149814cbe191feb.png"
+    },
+    {
+      "id": 9,
+      "left": "renders/rd03ac2fad47b7210.png",
+      "right": "renders/r402d022af70fbcee.png"
+    },
+    {
+      "id": 10,
+      "left": "renders/rd03ac2fad47b7210.png",
+      "right": "renders/r402d022af70fbcee.png"
+    },
+    {
+      "id": 11,
+      "left": "renders/rd03ac2fad47b7210.png",
+      "right": "renders/r402d022af70fbcee.png"
+    },
+    {
+      "id": 12,
+      "left": "renders/r79f245a769d2f9a7.png",
+      "right": "renders/rd03ac2fad47b7210.png"
+    },
+    {
+      "id": 13,
+      "left": "renders/rd03ac2fad47b7210.png",
+      "right": "renders/r79f245a769d2f9a7.png"
+    },
+    {
+      "id": 14,
+      "left": "renders/r79f245a769d2f9a7.png",
+      "right": "renders/rd03ac2fad47b7210.png"
+    },
+    {
+      "id": 15,
+      "left": "renders/r79f245a769d2f9a7.png",
+      "right": "renders/r402d022af70fbcee.png"
+    },
+    {
+      "id": 16,
+      "left": "renders/r402d022af70fbcee.png",
+      "right": "renders/r79f245a769d2f9a7.png"
+    },
+    {
+      "id": 17,
+      "left": "renders/r79f245a769d2f9a7.png",
+      "right": "renders/r402d022af70fbcee.png"
+    },
+    {
+      "id": 18,
+      "left": "renders/r9851f8380f701706.png",
+      "right": "renders/r9d02929dd1409934.png"
+    },
+    {
+      "id": 19,
+      "left": "renders/r9851f8380f701706.png",
+      "right": "renders/r9d02929dd1409934.png"
+    },
+    {
+      "id": 20,
+      "left": "renders/r9d02929dd1409934.png",
+      "right": "renders/r9851f8380f701706.png"
+    },
+    {
+      "id": 21,
+      "left": "renders/r6eac025e56ae349f.png",
+      "right": "renders/r9851f8380f701706.png"
+    },
+    {
+      "id": 22,
+      "left": "renders/r6eac025e56ae349f.png",
+      "right": "renders/r9851f8380f701706.png"
+    },
+    {
+      "id": 23,
+      "left": "renders/r9851f8380f701706.png",
+      "right": "renders/r6eac025e56ae349f.png"
+    },
+    {
+      "id": 24,
+      "left": "renders/r6eac025e56ae349f.png",
+      "right": "renders/r9d02929dd1409934.png"
+    },
+    {
+      "id": 25,
+      "left": "renders/r9d02929dd1409934.png",
+      "right": "renders/r6eac025e56ae349f.png"
+    },
+    {
+      "id": 26,
+      "left": "renders/r9d02929dd1409934.png",
+      "right": "renders/r6eac025e56ae349f.png"
+    },
+    {
+      "id": 27,
+      "left": "renders/red4168c1a42aefd6.png",
+      "right": "renders/r97987e5027bea5bd.png"
+    },
+    {
+      "id": 28,
+      "left": "renders/red4168c1a42aefd6.png",
+      "right": "renders/r97987e5027bea5bd.png"
+    },
+    {
+      "id": 29,
+      "left": "renders/red4168c1a42aefd6.png",
+      "right": "renders/r97987e5027bea5bd.png"
+    },
+    {
+      "id": 30,
+      "left": "renders/red4168c1a42aefd6.png",
+      "right": "renders/r853e7d0f6902d2ca.png"
+    },
+    {
+      "id": 31,
+      "left": "renders/red4168c1a42aefd6.png",
+      "right": "renders/r853e7d0f6902d2ca.png"
+    },
+    {
+      "id": 32,
+      "left": "renders/red4168c1a42aefd6.png",
+      "right": "renders/r853e7d0f6902d2ca.png"
+    },
+    {
+      "id": 33,
+      "left": "renders/r853e7d0f6902d2ca.png",
+      "right": "renders/r97987e5027bea5bd.png"
+    },
+    {
+      "id": 34,
+      "left": "renders/r853e7d0f6902d2ca.png",
+      "right": "renders/r97987e5027bea5bd.png"
+    },
+    {
+      "id": 35,
+      "left": "renders/r97987e5027bea5bd.png",
+      "right": "renders/r853e7d0f6902d2ca.png"
+    }
+  ]
+}
