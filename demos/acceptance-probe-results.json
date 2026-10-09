@@ -1,5 +1,5 @@
 {
-  "t": "2026-10-09T06:31:33.998Z",
+  "t": "2026-10-09T06:43:22.267Z",
   "results": [
     {
       "id": "A1-live-face-band",
@@ -29,7 +29,7 @@
     {
       "id": "demo-first-look-15s",
       "pass": true,
-      "detail": "first worn look at 2.6s"
+      "detail": "first worn look at 2.3s"
     },
     {
       "id": "B-saturation-up",
@@ -44,7 +44,7 @@
     {
       "id": "C-share-blob",
       "pass": true,
-      "detail": "blob 732891B type=image/png pngSig=true"
+      "detail": "blob 733006B type=image/png pngSig=true"
     },
     {
       "id": "B2-no-burned-text",
@@ -53,8 +53,8 @@
     },
     {
       "id": "B4-shuffle-visible",
-      "pass": false,
-      "detail": "srcChanged=true, render diff mean 0.192/255, peak 13/255"
+      "pass": true,
+      "detail": "srcChanged=true, render diff mean 0.215/255, peak 17/255"
     },
     {
       "id": "C2-soft-leads",

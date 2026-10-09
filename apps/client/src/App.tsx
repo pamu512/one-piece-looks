@@ -585,39 +585,63 @@ function LooksStage({
   };
 
   const current = looks?.looks[page];
+  const [shareCard, setShareCard] = useState<{ url: string; blob: Blob } | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const shareShownAt = useRef(0);
 
-  const doShare = async () => {
-    if (!looks || shareState === "working") return;
-    setShareState("working");
+  /** Compose once, then show the card visibly (B3: the user sees what ships). */
+  const openSharePreview = async () => {
+    if (!looks || shareBusy) return;
+    setShareBusy(true);
     try {
       const blob = await composeShareCard(
         looks.looks.map((l) => ({ imageUrl: l.imageUrl, role: ROLE_LABEL[l.role] })),
         lock.onFaceHex,
         ZONE_WORD[lock.category],
       );
-      const out = await shareLooksPng(blob, "One Piece Looks", "My three looks");
-      setShareState(out === "shared" ? "shared" : out === "downloaded" ? "downloaded" : out === "cancelled" ? "idle" : "failed");
-      if (out !== "cancelled") setTimeout(() => setShareState("idle"), 2200);
-      else setShareState("idle");
+      setShareCard({ url: URL.createObjectURL(blob), blob });
+      shareShownAt.current = Date.now();
     } catch {
       setShareState("failed");
       setTimeout(() => setShareState("idle"), 2200);
+    } finally {
+      setShareBusy(false);
     }
   };
 
-  const doSave = async () => {
-    if (!looks) return;
-    try {
-      const blob = await composeShareCard(
-        looks.looks.map((l) => ({ imageUrl: l.imageUrl, role: ROLE_LABEL[l.role] })),
-        lock.onFaceHex,
-        ZONE_WORD[lock.category],
-      );
-      downloadBlob(blob, "one-piece-looks.png");
-    } catch {
-      // no-op; save icon state feedback only
+  const closeSharePreview = () => {
+    if (shareCard) {
+      URL.revokeObjectURL(shareCard.url);
+      setShareCard(null);
     }
   };
+
+  /** Download from the preview. The card has been visible >= the open dwell. */
+  const saveFromPreview = () => {
+    if (!shareCard) return;
+    downloadBlob(shareCard.blob, "one-piece-looks.png");
+    setShareState("downloaded");
+    setTimeout(() => setShareState("idle"), 2200);
+    closeSharePreview();
+  };
+
+  /** Share from the preview via the system sheet; falls back to download. */
+  const shareFromPreview = async () => {
+    if (!shareCard) return;
+    const out = await shareLooksPng(shareCard.blob, "One Piece Looks", "My three looks");
+    if (out === "cancelled") return; // keep the preview up
+    setShareState(out === "shared" ? "shared" : out === "downloaded" ? "downloaded" : "failed");
+    setTimeout(() => setShareState("idle"), 2200);
+    closeSharePreview();
+  };
+
+  // Keyboard escape closes the preview.
+  useEffect(() => {
+    if (!shareCard) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeSharePreview(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [shareCard]);
 
   if (!looks) {
     return (
@@ -723,7 +747,7 @@ function LooksStage({
           ))}
         </div>
         <div className="bar-actions">
-          <button className="icon-btn" onClick={doSave} aria-label="Save the share card" disabled={shareState === "working"}>
+          <button className="icon-btn" onClick={openSharePreview} aria-label="Preview and save the share card" disabled={shareBusy}>
             <IconSave />
           </button>
           <button
@@ -734,7 +758,7 @@ function LooksStage({
           >
             <IconShuffle />
           </button>
-          <button className="icon-btn" onClick={doShare} aria-label="Share your three looks" disabled={shareState === "working"}>
+          <button className="icon-btn" onClick={openSharePreview} aria-label="Preview and share your three looks" disabled={shareBusy}>
             <IconShare />
           </button>
         </div>
@@ -753,28 +777,51 @@ function LooksStage({
       {shareState === "downloaded" && <div className="toast" role="status">Saved to your device</div>}
       {shareState === "failed" && <div className="toast" role="status">Share didn't go through</div>}
 
+      {shareCard && (
+        <>
+          <div className="sheet-scrim" onClick={closeSharePreview} aria-hidden />
+          <div className="sheet share-sheet" role="dialog" aria-label="Your share card">
+            <div className="sheet-handle" aria-hidden />
+            <p className="sheet-title">Your card</p>
+            <img src={shareCard.url} alt="Share card: your three looks with the locked swatch" className="share-preview" />
+            <p className="share-note">This is exactly what saves and shares.</p>
+            <div className="sheet-actions share-actions">
+              <button className="btn btn-ghost" onClick={closeSharePreview}>Back</button>
+              <button className="btn btn-ghost" onClick={saveFromPreview}>Save</button>
+              <button className="btn btn-primary" onClick={() => void shareFromPreview()}>Share</button>
+            </div>
+          </div>
+        </>
+      )}
+
       {vibeOpen && (
         <>
           <div className="sheet-scrim" onClick={() => setVibeOpen(false)} aria-hidden />
           <div className="sheet" role="dialog" aria-label="Vibe">
             <div className="sheet-handle" aria-hidden />
             <p className="sheet-title">Dress the moment</p>
+            {pairDirty && (
+              <p className="dirty-note" role="status">
+                <span className="vibe-dot" aria-hidden />
+                Changed since these looks were built. Rebuild when ready.
+              </p>
+            )}
             <p className="eyebrow" style={{ margin: "0 0 6px" }}>Mood</p>
-            <div className="chip-row" role="group" aria-label="Mood">
+            <div className="chip-row vibe-chips" role="group" aria-label="Mood">
               {MOODS_ORDERED.map((m) => (
-                <button key={m} className="chip" aria-pressed={mood === m} onClick={() => onMood(m)}>{m}</button>
+                <button key={m} className="chip chip-vibe" aria-pressed={mood === m} onClick={() => onMood(m)}>{m}</button>
               ))}
             </div>
             <p className="eyebrow" style={{ margin: "12px 0 6px" }}>Event</p>
-            <div className="chip-row" role="group" aria-label="Event">
+            <div className="chip-row vibe-chips" role="group" aria-label="Event">
               {EVENTS.map((e) => (
-                <button key={e} className="chip" aria-pressed={event === e} onClick={() => onEvent(e)}>{e}</button>
+                <button key={e} className="chip chip-vibe" aria-pressed={event === e} onClick={() => onEvent(e)}>{e}</button>
               ))}
             </div>
             <div className="sheet-actions">
               {pairDirty && (
                 <button className="btn btn-primary" onClick={() => { setVibeOpen(false); onRebuild(); }} disabled={busy || out}>
-                  Rebuild
+                  {busy ? "Rebuilding…" : "Rebuild"}
                 </button>
               )}
               <button className="btn btn-ghost" onClick={() => setVibeOpen(false)}>Done</button>
