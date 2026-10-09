@@ -20,7 +20,8 @@
  *
  * detectFace() stays synchronous and dependency-free; the optional model
  * path is detectFaceWithModel(), an async wrapper with the same output
- * shape (FaceLandmarks). It awaits YOLO, then BiSeNet lip parsing.
+ * shape (FaceLandmarks). It awaits the MediaPipe mesh; if that fails it
+ * falls back to YOLO box + the heuristic lip.
  * Capture awaits that promise. A parse failure keeps the redness lip.
  */
 
@@ -29,9 +30,7 @@ import {
   selectLipPolygon,
 } from "./faceFrame";
 import { detectFaceFrameModel } from "./faceModel";
-import { lipsOrHeuristic, meanLipFleshLab, parseLips } from "./faceParse";
-import { detectFaceWithMesh } from "./faceMesh";
-
+import { detectFaceWithMesh, meanLipFleshLab } from "./faceMesh";
 /** WFLW eye band midpoint (test split): fallback eye height inside faceBox. */
 const EYE_FALLBACK_Y = (EYE_BAND.y0 + EYE_BAND.y1) / 2;
 /** WFLW mouth band midpoint (test split): fallback lip height inside faceBox. */
@@ -289,12 +288,8 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
       const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
       return (r - Math.max(g, b)) - Math.abs(g - b) * 0.25;
     }) ?? lipFallback;
-    const rgbAt = (x: number, y: number): [number, number, number] => {
-      const i = (y * NORMAL_W + x) * 4;
-      return [data[i] ?? 0, data[i + 1] ?? 0, data[i + 2] ?? 0];
-    };
-    // No class-11 hole on the heuristic lip, and the card paints that case solid.
-    const mean = meanLipFleshLab(NORMAL_W, NORMAL_H, rgbAt, lip, undefined);
+    // No mouth hole on the heuristic lip: the card paints that case solid.
+    const mean = meanLipFleshLab(data, lip, undefined);
     if (mean !== null) {
       lipMeanL = mean.L;
       lipMeanA = mean.a;
@@ -322,19 +317,17 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
 
 /**
  * Async model path. Priority ladder (all optional, never rejects):
- *   1. MediaPipe 478-point mesh (license-clean, full-face rings; the
+ *   1. MediaPipe 478-point mesh (Apache-2.0, full-face rings; the
  *      bedhead-grade geometry) - wins when the landmarker loads.
- *   2. YOLO faceBox + BiSeNet lip parse (non-commercial weights).
- *   3. Heuristic: skin-grid box + redness lip (dependency-free floor).
+ *   2. Heuristic: skin-grid box + redness lip (dependency-free floor).
+ * The BiSeNet parser (non-commercial CelebAMask-HQ weights) was removed:
+ * the mesh supersedes it on every probed face.
  */
 export async function detectFaceWithModel(canvas: HTMLCanvasElement): Promise<FaceLandmarks | null> {
   const mesh = await detectFaceWithMesh(canvas);
   if (mesh) return mesh;
   const model = await detectFaceFrameModel(canvas).catch(() => null);
-  const base = detectFace(canvas, model);
-  if (!base || !model) return base;
-  const parsed = await parseLips(canvas, model.box).catch(() => null);
-  return lipsOrHeuristic(base, parsed);
+  return detectFace(canvas, model);
 }
 
 /**

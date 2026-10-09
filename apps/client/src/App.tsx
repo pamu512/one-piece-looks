@@ -8,7 +8,6 @@ import {
   detectFaceOnEncodedPhoto, normalizeTo45, suggestLock, type FaceLandmarks,
 } from "./lib/face";
 import { loadFaceFrameSession } from "./lib/faceModel";
-import { loadFaceParseSession } from "./lib/faceParse";
 import { composeShareCard, downloadBlob, shareLooksPng } from "./lib/share";
 import { warmDecode } from "./lib/warmDecode";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
@@ -255,7 +254,6 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
 
   useEffect(() => {
     void loadFaceFrameSession();
-    void loadFaceParseSession();
     void cam.start();
     return () => cam.stop();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

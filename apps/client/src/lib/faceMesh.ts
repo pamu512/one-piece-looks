@@ -216,7 +216,7 @@ export function faceBoxFromOval(oval: MeshPoly): MeshFaceBox | null {
   return { x: minX, y: minY, w, h };
 }
 
-/* ---------- mean lip color (same contract as faceParse.meanLipFleshLab) ---------- */
+/* ---------- mean lip color (same contract as face.ts uses for the heuristic lip) ---------- */
 
 const LAB_XN = 0.95047;
 const LAB_YN = 1;
