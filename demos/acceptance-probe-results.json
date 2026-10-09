@@ -1,5 +1,5 @@
 {
-  "t": "2026-10-09T08:10:33.138Z",
+  "t": "2026-10-09T13:06:38.510Z",
   "results": [
     {
       "id": "A1-live-face-band",
@@ -29,12 +29,12 @@
     {
       "id": "demo-first-look-15s",
       "pass": true,
-      "detail": "first worn look at 2.5s"
+      "detail": "first worn look at 2.4s"
     },
     {
       "id": "B-saturation-up",
       "pass": true,
-      "detail": "lip-band sat makeup 0.5370 vs bare 0.5211"
+      "detail": "lip-band sat makeup 0.5372 vs bare 0.5211"
     },
     {
       "id": "B5-hold-compare",
@@ -44,7 +44,7 @@
     {
       "id": "C-share-blob",
       "pass": true,
-      "detail": "blob 732567B type=image/png pngSig=true"
+      "detail": "blob 732666B type=image/png pngSig=true"
     },
     {
       "id": "B2-no-burned-text",
@@ -54,7 +54,7 @@
     {
       "id": "B4-shuffle-visible",
       "pass": true,
-      "detail": "srcChanged=true, render diff mean 0.164/255, peak 16/255"
+      "detail": "srcChanged=true, render diff mean 0.426/255, peak 18/255"
     },
     {
       "id": "C2-soft-leads",
@@ -64,7 +64,7 @@
     {
       "id": "A3-denied-branded",
       "pass": true,
-      "detail": "denied frame avgLum 37.9"
+      "detail": "denied frame avgLum 37.8"
     },
     {
       "id": "A3-denied-cta-only",

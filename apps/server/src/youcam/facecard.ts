@@ -1908,7 +1908,10 @@ export function lipVermillionEdge(interEye: number, lipRy: number, bandPx?: numb
   const full = ry * 2;
   const band = typeof bandPx === "number" && Number.isFinite(bandPx) && bandPx > 1 ? bandPx : full;
   const measure = Math.min(full, Math.max(1, band));
-  const small = full < LIP_SMALL_PX;
+  // Inclusive: a mouth exactly AT the threshold (face-test, full=56) is still
+  // small; the exclusive < dropped it onto the normal-mouth erode path, where
+  // the 2.5px erode + feather pared a thin lip to a sliver of paint.
+  const small = full <= LIP_SMALL_PX;
   // Normal mouths erode 2.5 px (radius 3) so the soft skirt stays inside a blurry
   // outline. A short mouth may drop below 1 px and skip the erode.
   const erode = small ? Math.min(1.5, 0.08 * measure) : 2.5;

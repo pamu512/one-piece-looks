@@ -135,6 +135,27 @@ export function ring(pts: readonly MeshPoint[], indices: readonly number[]): Mes
   return out;
 }
 
+/**
+ * Chaikin corner-cutting on a closed ring: each edge becomes two points at
+ * 25%/75%, doubling resolution and interpolating the curve through sparse
+ * landmarks without shrinking the ring (the new points lie ON the chords,
+ * corners pull inward only where the polygon is convex - the traced flesh).
+ */
+export function chaikinClosed(poly: MeshPoly, passes = 2): MeshPoly {
+  let cur = poly as [number, number][];
+  for (let p = 0; p < passes; p++) {
+    const out: [number, number][] = [];
+    for (let i = 0; i < cur.length; i++) {
+      const a = cur[i]!;
+      const b = cur[(i + 1) % cur.length]!;
+      out.push([0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]]);
+      out.push([0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]]);
+    }
+    cur = out;
+  }
+  return cur;
+}
+
 export const RING_INDICES = {
   outerLips: OUTER_LIPS,
   innerLips: INNER_LIPS,
@@ -312,8 +333,13 @@ export async function detectFaceWithMesh(canvas: HTMLCanvasElement): Promise<imp
     if (!face || face.length < 468) return null;
     const pts: MeshPoint[] = face.map((p) => ({ x: p.x, y: p.y, z: p.z ?? 0 }));
 
-    const lip = ring(pts, RING_INDICES.outerLips);
-    const lipInner = ring(pts, RING_INDICES.innerLips);
+    // The 20-point ring connects sparse landmarks with straight chords; on a
+    // curved lip that cuts the flesh at the cupid's bow and corners (measured:
+    // ~50% under-fill vs hand traces on small mouths). Two Chaikin passes
+    // interpolate the curve the landmarks describe, the same treatment the
+    // old parser path gave its contours. Same for the inner ring.
+    const lip = chaikinClosed(ring(pts, RING_INDICES.outerLips));
+    const lipInner = chaikinClosed(ring(pts, RING_INDICES.innerLips));
     const eyeL = ring(pts, RING_INDICES.eyeL);
     const eyeR = ring(pts, RING_INDICES.eyeR);
     const browLArc = browArc(pts, RING_INDICES.browL);
