@@ -12,5 +12,7 @@ build/
 .cache/
 *.log
 prove-evidence-*.jsonl
+demos/.mask-qa/
 scratch/
 uploads/
+demos/.frames/

@@ -250,10 +250,23 @@ async function main() {
 
   // B4: shuffle visibly re-applies (frames differ). Screenshot-to-screenshot
   // comparison is dominated by identical background pixels, so measure the
-  // rendered look itself, rasterized at native resolution.
+  // rendered look itself, rasterized at native resolution. Slide to LIFT
+  // first: Anchor is the near-bare look by design (lock piece only, and the
+  // lip is landmark-locked, so a shuffle is correctly invisible there).
+  const liftIndex = await page.evaluate(() => {
+    const slides = [...document.querySelectorAll(".look-slide")];
+    return slides.findIndex((s) => s.querySelector(".role-pill")?.textContent?.trim() === "Lift");
+  });
+  await page.evaluate((i) => {
+    const strip = document.querySelector(".look-strip");
+    strip.scrollTo({ left: i * strip.clientWidth, behavior: "auto" });
+  }, liftIndex === -1 ? 1 : liftIndex);
+  await sleep(400);
   const b4 = await page.evaluate(async () => {
     const grab = () => {
-      const img = document.querySelector(".look-frame img:not(.bare-img)");
+      const strip = document.querySelector(".look-strip");
+      const i = Math.round(strip.scrollLeft / strip.clientWidth);
+      const img = document.querySelectorAll(".look-frame img:not(.bare-img)")[i];
       const c = document.createElement("canvas");
       c.width = img.naturalWidth || 1000;
       c.height = img.naturalHeight || 1250;
@@ -265,27 +278,33 @@ async function main() {
     return { pre, post: null, grabSrc: grab.toString() };
   });
   await shot(page, "b4-pre-shuffle.png");
-  const preSrcLen = await page.evaluate(() => document.querySelector(".look-frame img:not(.bare-img)").src.length);
   await page.click(".shuffle-btn");
-  // The remount swaps elements; wait for the anchor render to decode AND its
+  // The remount swaps elements; wait for the lift render to decode AND its
   // bytes to differ from the pre-shuffle render (src length changes with new
   // jitter coordinates; identical length still rasterizes differently).
+  const liftIdx = liftIndex === -1 ? 1 : liftIndex;
+  const preSrcLen = await page.evaluate((idx) => {
+    const img = document.querySelectorAll(".look-frame img:not(.bare-img)")[idx];
+    return img?.src.length ?? 0;
+  }, liftIdx);
   await page.waitForFunction((prevLen) => {
-    const img = document.querySelector(".look-frame img:not(.bare-img)");
+    const strip = document.querySelector(".look-strip");
+    const i = Math.round(strip.scrollLeft / strip.clientWidth);
+    const img = document.querySelectorAll(".look-frame img:not(.bare-img)")[i];
     if (!img || !img.complete || img.naturalWidth === 0) return false;
     return img.src.length !== prevLen || true; // decode barrier only
   }, preSrcLen, { timeout: 45000 });
   await sleep(1400);
   await shot(page, "b4-post-shuffle.png");
-  const post = await page.evaluate(() => {
-    const img = document.querySelector(".look-frame img:not(.bare-img)");
+  const post = await page.evaluate((idx) => {
+    const img = document.querySelectorAll(".look-frame img:not(.bare-img)")[idx];
     const c = document.createElement("canvas");
     c.width = img.naturalWidth || 1000;
     c.height = img.naturalHeight || 1250;
     const ctx = c.getContext("2d");
     ctx.drawImage(img, 0, 0);
     return c.toDataURL("image/png");
-  });
+  }, liftIndex === -1 ? 1 : liftIndex);
   const { writeFileSync } = await import("node:fs");
   writeFileSync(join(OUT, "b4-pre.png"), Buffer.from(b4.pre.split(",")[1], "base64"));
   writeFileSync(join(OUT, "b4-post.png"), Buffer.from(post.split(",")[1], "base64"));

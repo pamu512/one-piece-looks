@@ -1332,6 +1332,59 @@ function finishStamps(
   return next;
 }
 
+/**
+ * Per-seed support-layer scale, -1..1. A shuffle must visibly re-apply:
+ * the builder already picks a different pattern name per seed, but the mock
+ * compositor paints geometry from landmarks and color, so without this the
+ * two shuffles rasterize identically apart from a sub-visible 1-3 px shift
+ * (B4 acceptance: peak delta 3/255, gate 16). The scale rides the same
+ * seed the builder uses, so a given look is still deterministic, and it
+ * never touches lip_color: the lock hex and its outline stay put.
+ */
+export function seedVariation(seed: number, category: string): number {
+  let h = seed | 0;
+  const c = category;
+  for (let i = 0; i < c.length; i++) {
+    h ^= c.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 0x5bd1e995);
+  h ^= h >>> 15;
+  return ((h >>> 0) / 0xffffffff) * 2 - 1;
+}
+
+/** Category bands for the shuffle variation: how much each layer may move. */
+const VARIATION_SCALE: Record<string, number> = {
+  // Eyes: thickness of the lid shelf / lash line, the "definition" layer.
+  eye_shadow: 0.6,
+  eye_liner: 0.6,
+  eyelashes: 0.6,
+  eyebrows: 0.45,
+  // Blush wobbles size a little; contour/highlighter stay face-anchored.
+  blush: 0.3,
+  contour: 0.08,
+  highlighter: 0.12,
+};
+
+/**
+ * A second, signed variation for asymmetric re-rolls (which extra wash a
+ * shuffle picked). Kept separate so the mirrored pair still shares one value:
+ * L/R symmetry is a standing gate (A2) and must not regress.
+ */
+export function seedVariation2(seed: number, category: string): number {
+  let h = (seed ^ 0x9e3779b9) | 0;
+  const c = `${category}#2`;
+  for (let i = 0; i < c.length; i++) {
+    h ^= c.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 13;
+  h = Math.imul(h, 0x5bd1e995);
+  h ^= h >>> 15;
+  return ((h >>> 0) / 0xffffffff) * 2 - 1;
+}
+
 function categoryJitterSeed(seed: number, effects: VtoEffect[]): number {
   let h = seed | 0;
   for (const e of effects) {
@@ -1683,7 +1736,7 @@ function veilSteps(srcPhoto: string, cur: string, maskId: string, focus: number,
   return { xml: parts.join(""), out: name === cur ? "veo" : name };
 }
 
-function buildJob(e: VtoEffect, role: string, lm: FaceLandmarks | undefined, jitter: number, kernel: number, sigma: number): Job | null {
+function buildJob(e: VtoEffect, role: string, lm: FaceLandmarks | undefined, jitter: number, kernel: number, sigma: number, variationSeed?: number): Job | null {
   const category = effectCategory(e);
   if (!category || category === "skin_smooth" || category === "lip_color") return null;
   const color = effectColor(e);
@@ -1691,11 +1744,40 @@ function buildJob(e: VtoEffect, role: string, lm: FaceLandmarks | undefined, jit
   const chosen = role !== "anchor" && DEFINE_COLORS[category] ? DEFINE_COLORS[category]! : color;
   const paint = safeHex(chosen);
   if (!paint) return null;
+  // Shuffle variation: eye shelves thicken/thin, blush swells slightly. One
+  // value per category, mirrored L/R (symmetry gate A2). Anchor stays calm:
+  // it is the near-bare look, so it takes half the band.
+  const vScale = VARIATION_SCALE[category];
+  let thicknessK = 1;
+  let sizeK = 1;
+  let yOffset = 0;
+  if (vScale !== undefined && variationSeed !== undefined) {
+    const v = seedVariation(variationSeed, category) * vScale * (role === "anchor" ? 0.5 : 1);
+    if (category === "eye_shadow" || category === "eye_liner" || category === "eyelashes") {
+      thicknessK = 1 + v;
+      // A visible re-roll also slides the shelf up/down the lid, not only
+      // its thickness: a 1px thickness delta alone rasterizes under the gate.
+      yOffset = seedVariation2(variationSeed, category) * 3 * (role === "anchor" ? 0.5 : 1);
+    } else if (category === "eyebrows") {
+      thicknessK = 1 + v;
+    } else {
+      sizeK = 1 + v;
+    }
+  }
   const alpha = zoneAlpha(category, colorIntensityOf(e), role);
   const lightness = zoneLightness(category);
-  const grow = zoneGrow(category, colorIntensityOf(e), role);
+  const grow = (zoneGrow(category, colorIntensityOf(e), role)) * sizeK;
   if (!Number.isFinite(alpha) || !Number.isFinite(lightness) || !Number.isFinite(grow) || alpha <= 0) return null;
-  const stamps = finishStamps(category, stampsFor(category, lm), grow, jitter, faceAxis(lm));
+  let rawStamps = stampsFor(category, lm);
+  if (thicknessK !== 1 || yOffset !== 0) {
+    // Lid shelf / brow ribbon: scale the band height and slide it along the
+    // lid. refit keeps the mirrored cx/cy; the offset rides after it.
+    rawStamps = rawStamps.map((s) => {
+      const shifted = refit(s, { cx: s.cx, cy: s.cy + yOffset, rx: s.rx, ry: Math.max(2, s.ry * thicknessK) });
+      return shifted;
+    });
+  }
+  const stamps = finishStamps(category, rawStamps, grow, jitter, faceAxis(lm));
   if (stamps.length === 0) return null;
   const falloff = category === "blush" || category === "contour" || category === "highlighter";
   const skin = category === "blush" ? skinCoverage(lm) : undefined;
@@ -1846,7 +1928,7 @@ export function faceCardSvg(
       if (lj) lip = lj;
       continue;
     }
-    const job = buildJob(e, role, landmarks, jitter, kernel, sigma);
+    const job = buildJob(e, role, landmarks, jitter, kernel, sigma, seed);
     if (job) jobs.push(job);
   }
   const under = jobs.filter((j) => UNDER_VEIL.has(j.category));
