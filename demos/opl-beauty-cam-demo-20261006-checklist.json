@@ -1,0 +1,74 @@
+{
+  "mp4": "/Users/pamu/Projects/one-piece-looks/demos/opl-beauty-cam-demo-20261006.mp4",
+  "bytes": 819849,
+  "durationSec": 28.92,
+  "firstLookMs": 7194,
+  "shareBlobBytes": 389817,
+  "marks": [
+    {
+      "t": 125,
+      "name": "mirror-live"
+    },
+    {
+      "t": 2396,
+      "name": "shutter"
+    },
+    {
+      "t": 3892,
+      "name": "auto-locked"
+    },
+    {
+      "t": 7194,
+      "name": "first-look"
+    },
+    {
+      "t": 7195,
+      "name": "lock-on-looks:Your lip, kept"
+    },
+    {
+      "t": 12403,
+      "name": "lift-dwell"
+    },
+    {
+      "t": 15407,
+      "name": "statement-dwell"
+    },
+    {
+      "t": 17019,
+      "name": "hold-compare"
+    },
+    {
+      "t": 19522,
+      "name": "shuffled"
+    },
+    {
+      "t": 19524,
+      "name": "lock-after-shuffle"
+    },
+    {
+      "t": 21768,
+      "name": "vibe-open"
+    },
+    {
+      "t": 23740,
+      "name": "rebuilt-nightout"
+    },
+    {
+      "t": 25840,
+      "name": "share-card"
+    }
+  ],
+  "gates": {
+    "firstLookBy14s": true,
+    "shareBlobPositive": true,
+    "durationUnder60": true,
+    "consoleClean": true,
+    "noDeniedHero": true,
+    "noStaticHoldOver4s": true
+  },
+  "errors": [],
+  "face": "/Users/pamu/Projects/one-piece-looks/demos/.mask-qa/faces/face-c-blonde.png",
+  "lockChipBefore": "Your lip, kept",
+  "lockChipAfter": "Your lip, kept",
+  "maxStaticSeconds": 1
+}

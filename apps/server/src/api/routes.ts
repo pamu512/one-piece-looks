@@ -84,9 +84,25 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
     if (w <= 0 || h <= 0 || w > 1.2 || h > 1.2) return undefined;
     return { x, y, w, h };
   };
+  const labL = (v: unknown): number | undefined => {
+    const n = typeof v === "number" ? v : Number.NaN;
+    return Number.isFinite(n) && n >= 0 && n <= 100 ? n : undefined;
+  };
+  const labAB = (v: unknown): number | undefined => {
+    const n = typeof v === "number" ? v : Number.NaN;
+    return Number.isFinite(n) && n >= -128 && n <= 127 ? n : undefined;
+  };
+  const lipMeanL = labL(r.lipMeanL);
+  const lipMeanA = labAB(r.lipMeanA);
+  const lipMeanB = labAB(r.lipMeanB);
   const lm: FaceLandmarks = {
     ...(box(r.faceBox) ? { faceBox: box(r.faceBox) } : {}),
     ...(poly(r.lip) ? { lip: poly(r.lip) } : {}),
+    ...(poly(r.lipInner) ? { lipInner: poly(r.lipInner) } : {}),
+    ...(lipMeanL !== undefined ? { lipMeanL } : {}),
+    ...(lipMeanA !== undefined ? { lipMeanA } : {}),
+    ...(lipMeanB !== undefined ? { lipMeanB } : {}),
+    ...(poly(r.skin) ? { skin: poly(r.skin) } : {}),
     ...(poly(r.eyeL) ? { eyeL: poly(r.eyeL) } : {}),
     ...(poly(r.eyeR) ? { eyeR: poly(r.eyeR) } : {}),
     ...(poly(r.browL) ? { browL: poly(r.browL) } : {}),

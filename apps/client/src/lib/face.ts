@@ -20,13 +20,16 @@
  *
  * detectFace() stays synchronous and dependency-free; the optional model
  * path is detectFaceWithModel(), an async wrapper with the same output
- * shape (FaceLandmarks), so App.tsx can await it and fall back cleanly.
+ * shape (FaceLandmarks). It awaits YOLO, then BiSeNet lip parsing.
+ * Capture awaits that promise. A parse failure keeps the redness lip.
  */
 
 import {
   BROW_MID_Y, clampCenterInBand, decideFaceBox, EYE_BAND, MOUTH_BAND, eyeBand, mouthBand,
+  selectLipPolygon,
 } from "./faceFrame";
 import { detectFaceFrameModel } from "./faceModel";
+import { lipsOrHeuristic, meanLipFleshLab, parseLips } from "./faceParse";
 
 /** WFLW eye band midpoint (test split): fallback eye height inside faceBox. */
 const EYE_FALLBACK_Y = (EYE_BAND.y0 + EYE_BAND.y1) / 2;
@@ -42,6 +45,16 @@ export type Poly = ReadonlyArray<readonly [number, number]>;
 export interface FaceLandmarks {
   faceBox: FaceBox;
   lip: Poly;
+  /** Mouth opening. Omitted when the mouth is closed or the parser has no class-11 gap. */
+  lipInner?: Poly | undefined;
+  /** Mean CIE L* of the lip flesh. The mouth hole is not included. */
+  lipMeanL?: number | undefined;
+  /** Mean CIE a* of the lip flesh, -128..127. The mouth hole is not included. */
+  lipMeanA?: number | undefined;
+  /** Mean CIE b* of the lip flesh, -128..127. The mouth hole is not included. */
+  lipMeanB?: number | undefined;
+  /** Class-1 skin contour. The card falls back to the face oval when this is absent. */
+  skin?: Poly | undefined;
   eyeL: Poly;
   eyeR: Poly;
   browL: Poly;
@@ -253,32 +266,50 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
     clampCenterInBand(eyeR[1], eye.y0, eye.y1, eyeRy),
   ];
 
-  // --- lips: redness peak inside the WFLW mouth band of faceBox ---
+  // Lips: redness mass inside the mouth band (half-res, same window the
+  // alignment probe scores), not a fixed ellipse on a coarse patch mean.
   const mouth = mouthBand(faceBox);
-  let lip: [number, number] = [
-    fx0 + fw * 0.5,
-    fy0 + fh * MOUTH_FALLBACK_Y,
-  ];
-  {
-    let bestScore = -Infinity;
-    const y0 = Math.max(1, Math.floor(mouth.y0 * 100)), y1 = Math.min(98, Math.floor(mouth.y1 * 100));
-    for (let gy = y0; gy <= y1; gy += 2) {
-      for (let gx = Math.floor(mouth.x0 * 100); gx <= Math.floor(mouth.x1 * 100); gx += 2) {
-        const [r, g, bb] = patchMean(ctx, gx / 100, gy / 100, 3);
-        const score = (r - Math.max(g, bb)) - Math.abs(g - bb) * 0.25;
-        if (score > bestScore) { bestScore = score; lip = [gx / 100, gy / 100]; }
-      }
-    }
-  }
-
   const lipR = { rx: fw * 0.11, ry: Math.max(fh * 0.035, 0.02) };
-  const lipCx = clampCenterInBand(lip[0], mouth.x0, mouth.x1, lipR.rx);
-  const lipCy = clampCenterInBand(lip[1], mouth.y0, mouth.y1, lipR.ry);
+  const lipFallback = polyFromBox(
+    clampCenterInBand(fx0 + fw * 0.5, mouth.x0, mouth.x1, lipR.rx),
+    clampCenterInBand(fy0 + fh * MOUTH_FALLBACK_Y, mouth.y0, mouth.y1, lipR.ry),
+    lipR.rx,
+    lipR.ry,
+    12,
+  );
+  let lip: Poly = lipFallback;
+  let lipMeanL: number | undefined;
+  let lipMeanA: number | undefined;
+  let lipMeanB: number | undefined;
+  try {
+    const data = ctx.getImageData(0, 0, NORMAL_W, NORMAL_H).data;
+    lip = selectLipPolygon(NORMAL_W, NORMAL_H, faceBox, (x, y) => {
+      const i = (y * NORMAL_W + x) * 4;
+      const r = data[i] ?? 0, g = data[i + 1] ?? 0, b = data[i + 2] ?? 0;
+      return (r - Math.max(g, b)) - Math.abs(g - b) * 0.25;
+    }) ?? lipFallback;
+    const rgbAt = (x: number, y: number): [number, number, number] => {
+      const i = (y * NORMAL_W + x) * 4;
+      return [data[i] ?? 0, data[i + 1] ?? 0, data[i + 2] ?? 0];
+    };
+    // No class-11 hole on the heuristic lip, and the card paints that case solid.
+    const mean = meanLipFleshLab(NORMAL_W, NORMAL_H, rgbAt, lip, undefined);
+    if (mean !== null) {
+      lipMeanL = mean.L;
+      lipMeanA = mean.a;
+      lipMeanB = mean.b;
+    }
+  } catch {
+    lip = lipFallback;
+  }
   const browY = fy0 + fh * BROW_MID_Y;
 
   return {
     faceBox,
-    lip: polyFromBox(lipCx, lipCy, lipR.rx, lipR.ry, 10),
+    lip,
+    ...(lipMeanL !== undefined ? { lipMeanL } : {}),
+    ...(lipMeanA !== undefined ? { lipMeanA } : {}),
+    ...(lipMeanB !== undefined ? { lipMeanB } : {}),
     eyeL: polyFromBox(eyeL[0], eyeL[1], eyeR2, eyeR2 * 0.62, 8),
     eyeR: polyFromBox(eyeR[0], eyeR[1], eyeR2, eyeR2 * 0.62, 8),
     browL: polyFromBox(eyeL[0], (eyeL[1] + browY) / 2, eyeR2 * 1.15, eyeR2 * 0.32, 8),
@@ -289,12 +320,40 @@ export function detectFace(canvas: HTMLCanvasElement, modelBox?: { box: FaceBox;
 }
 
 /**
- * Async model path: ONNX faceBox when available, heuristic otherwise.
- * Same output shape as detectFace; never rejects (model errors fall back).
+ * Async model path. Awaits the YOLO box, then the BiSeNet lip parse.
+ * Heuristic lips (and their lip means) stay only when the parser fails
+ * to load, throws, or returns an implausible lip area. Never rejects.
  */
 export async function detectFaceWithModel(canvas: HTMLCanvasElement): Promise<FaceLandmarks | null> {
   const model = await detectFaceFrameModel(canvas).catch(() => null);
-  return detectFace(canvas, model);
+  const base = detectFace(canvas, model);
+  if (!base || !model) return base;
+  const parsed = await parseLips(canvas, model.box).catch(() => null);
+  return lipsOrHeuristic(base, parsed);
+}
+
+/**
+ * Landmarks for the JPEG the server actually paints. Scoring the pre-encode
+ * canvas lets a one-pixel redness peak jump off the mouth after q=0.92.
+ */
+export function detectFaceOnEncodedPhoto(
+  jpegUrl: string,
+  fallback: HTMLCanvasElement,
+): Promise<FaceLandmarks | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = fallback.width || NORMAL_W;
+      c.height = fallback.height || NORMAL_H;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      if (!ctx) { void detectFaceWithModel(fallback).then(resolve); return; }
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      void detectFaceWithModel(c).then(resolve);
+    };
+    img.onerror = () => { void detectFaceWithModel(fallback).then(resolve); };
+    img.src = jpegUrl;
+  });
 }
 
 /**

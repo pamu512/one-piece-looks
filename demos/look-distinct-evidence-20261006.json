@@ -1,0 +1,59 @@
+{
+  "t": "2026-10-06T09:55:00+08:00",
+  "head": "a7ce930 fix: show Soft x Casual looks apart on a light face",
+  "bug": "Demo video showed pixel-identical Anchor/Lift/Statement + hold-to-compare. Root causes: (1) CSS lookIn animation with fill both kept the bare-photo overlay at opacity 1 over every look (client), (2) mock faceCard support layers used soft-light blend at low opacity with 26px blur - a few luma levels of change, invisible after phone-video compression (server).",
+  "fixCommits": ["4bdb9c5", "a7ce930"],
+  "tests": { "server": "65 passed (facecard 14)", "client": "8 passed" },
+  "prove": {
+    "cmd": "YOUCAM_MOCK=1 npm run prove:lipstick",
+    "result": "PROVE_OK",
+    "lock": { "category": "lip", "onFaceHex": "#b3122e" },
+    "asserts": "lock hex #b3122e asserted identical on anchor/lift/statement chips and after shuffle; rendersLeft 3 of 9"
+  },
+  "apiProbe": {
+    "script": "demos/probe-look-distinct.mjs",
+    "face": "apps/server/fixtures/face-portrait-live.jpg",
+    "softCasual": {
+      "anchorVsBare": { "mean": 1.226 },
+      "liftVsBare": { "mean": 2.847 },
+      "stmtVsBare": { "mean": 13.596 },
+      "ordering": "anchor 1.226 < lift 2.847 < statement 13.596 (mean luma delta vs bare)"
+    },
+    "softNight": {
+      "anchorVsBare": { "mean": 1.237 },
+      "liftVsBare": { "mean": 2.513 },
+      "stmtVsBare": { "mean": 14.84 },
+      "ordering": "anchor 1.237 < lift 2.513 < statement 14.84"
+    },
+    "checks": "10/10 PASS (lock hex all three, 3 unique imageUrls, anchor near-bare, lift visible, statement fullest - both mood/event pairs)"
+  },
+  "uiProbe": {
+    "script": "demos/probe-ui-distinct.mjs",
+    "face": "demos/.mask-qa/faces/face-c-blonde.png (light skin, client landmarks sent)",
+    "softCasual": {
+      "anchorVsBare": { "mean": 0.193, "changedPct": 0.37 },
+      "liftVsBare": { "mean": 1.107, "changedPct": 1.87 },
+      "stmtVsBare": { "mean": 4.255, "changedPct": 8.93 },
+      "liftVsAnchor": { "mean": 0.914, "changedPct": 1.51 },
+      "stmtVsLift": { "mean": 3.339, "changedPct": 8.55 },
+      "lipRegionRgbIdenticalAcrossRoles": [192, 137, 117]
+    },
+    "holdToCompare": { "wornHidden": true, "bareShown": true, "pill": "Your face" },
+    "checks": "6/6 PASS"
+  },
+  "demoVideo": {
+    "mp4": "demos/opl-beauty-cam-demo-20261006.mp4",
+    "recorder": "demos/record-beauty-cam-demo-20261006.mjs",
+    "gates": "all PASS (first look 7.19s < 14s, duration 28.92s < 60s, share blob 389817B, console clean, no static hold > 4s)",
+    "frameDiffFaceBand": {
+      "windows": { "anchor": "9.0s", "lift": "11.5s", "statement": "15.0s", "bareHold": "17.2s" },
+      "anchorVsLift": { "mean": 3.95, "changedPct": 14.69 },
+      "anchorVsStatement": { "mean": 9.54, "changedPct": 26.96 },
+      "liftVsStatement": { "mean": 7.33, "changedPct": 14.47 },
+      "statementVsBare": { "mean": 9.77, "changedPct": 27.25 },
+      "liftVsBare": { "mean": 4.27, "changedPct": 15.44 },
+      "anchorVsBare": { "mean": 1.85, "changedPct": 1.52 },
+      "meanDeltaVsBare": "anchor 1.845 < lift 4.274 < statement 9.767"
+    }
+  }
+}

@@ -91,6 +91,15 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 export interface FaceLandmarksPayload {
   faceBox?: { x: number; y: number; w: number; h: number };
   lip?: [number, number][];
+  lipInner?: [number, number][];
+  /** CIE L* of the lip flesh, 0..100. */
+  lipMeanL?: number;
+  /** CIE a* of the lip flesh, -128..127. */
+  lipMeanA?: number;
+  /** CIE b* of the lip flesh, -128..127. */
+  lipMeanB?: number;
+  /** Class-1 skin contour. */
+  skin?: [number, number][];
   eyeL?: [number, number][];
   eyeR?: [number, number][];
   browL?: [number, number][];

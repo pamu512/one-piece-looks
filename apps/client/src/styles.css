@@ -585,15 +585,17 @@ body {
   height: 100%;
   object-fit: cover;
   display: block;
-  animation: lookIn 200ms ease both;
+  animation: lookIn 120ms ease-out both;
 }
 .look-frame img.bare {
+  animation: none;
   opacity: 0;
   transition: opacity 160ms ease;
 }
 .look-frame .bare-img {
   position: absolute;
   inset: 0;
+  animation: none;
   opacity: 0;
   transition: opacity 160ms ease;
   z-index: 2;

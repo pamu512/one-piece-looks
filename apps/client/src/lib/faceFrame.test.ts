@@ -17,6 +17,7 @@ import test from "node:test";
 import {
   BROW_MID_Y, EYE_BAND, HAND_BAND_Y, MOUTH_BAND,
   clampCenterInBand, clampFaceBox, decideFaceBox, eyeBand, mouthBand, portraitPriorFaceBox,
+  selectLipPolygon,
 } from "./faceFrame.ts";
 import type { FaceBox } from "./face.ts";
 
@@ -135,3 +136,139 @@ test("decideFaceBox: model wins, skin falls through, prior is the floor", () => 
   assert.ok(prior.y + prior.h < HAND_BAND_Y);
   assert.ok(prior.y > 0.05 && prior.y + prior.h < 0.95);
 });
+
+test("lip polygon follows the redness peak, not a broader dimmer patch", () => {
+  const w = 100, h = 125;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const score = (x: number, y: number) => {
+    // Nose sits inside the mouth band and is broader, but dimmer.
+    const nose = Math.max(0, 28 - Math.hypot(x - 50, y - 76) * 0.35);
+    const lip = Math.max(0, 50 - Math.hypot((x - 50) / 1.3, (y - 92) / 0.65));
+    return Math.max(nose, lip);
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 3);
+  let sx = 0, sy = 0;
+  for (const [x, y] of poly!) { sx += x; sy += y; }
+  const cy = sy / poly!.length;
+  assert.ok(cy > 0.68 && cy < 0.80, `lip centroid y ${cy}`);
+  assert.equal(inside(poly!, 0.5, 92.5 / 125), true);
+  assert.equal(inside(poly!, 0.5, 70 / 125), false);
+});
+
+test("a hot speck beside the mouth does not pull the lip polygon off the lip", () => {
+  const w = 200, h = 250;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const lipX = 90, lipY = 185;
+  const score = (x: number, y: number) => {
+    const lip = Math.max(0, 80 - Math.hypot((x - lipX) / 0.45, (y - lipY) / 0.28));
+    const speck = x === 148 && y === lipY ? 500 : 0;
+    return Math.max(lip, speck);
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 3);
+  assert.equal(inside(poly!, (lipX + 0.5) / w, (lipY + 0.5) / h), true, "lip center stays inside the fill");
+  let sx = 0, sy = 0;
+  for (const [x, y] of poly!) { sx += x; sy += y; }
+  const cx = sx / poly!.length;
+  const cy = sy / poly!.length;
+  assert.ok(Math.abs(cx - (lipX + 0.5) / w) < 0.06, `centroid x ${cx} drifted toward the speck`);
+  assert.ok(Math.abs(cy - (lipY + 0.5) / h) < 0.04, `centroid y ${cy}`);
+  assert.equal(inside(poly!, 148.5 / w, (lipY + 0.5) / h), false, "speck is outside the lip fill");
+});
+
+test("lip polygon follows the vermillion notch instead of the convex hull", () => {
+  const w = 100, h = 125;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const cx = 50, cy = 92, rx = 14, ry = 5;
+  const score = (x: number, y: number) => {
+    const nx = (x - cx) / rx;
+    const ny = (y - cy) / ry;
+    const inLip = nx * nx + ny * ny <= 1;
+    const notch = Math.abs(x - cx) <= 4 && y < cy - 1;
+    return inLip && !notch ? 90 : 0;
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 3);
+  assert.equal(inside(poly!, cx / w, cy / h), true, "lip center stays inside");
+  // Below the shoulder line, inside the hull of the ellipse, inside the cut.
+  assert.equal(inside(poly!, cx / w, (cy - 2) / h), false, "cupid notch stays empty");
+  assert.ok(poly!.length <= 64, `outline has ${poly!.length} points`);
+});
+
+test("lip polygon drops the dim mouth rectangle and keeps the hot vermillion", () => {
+  const w = 200, h = 250;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const cx = 100, cy = 185, rx = 22, ry = 8;
+  const score = (x: number, y: number) => {
+    const nx = (x - cx) / rx;
+    const ny = (y - cy) / ry;
+    if (nx * nx + ny * ny <= 1) return 100;
+    if (Math.abs(x - cx) <= 40 && Math.abs(y - cy) <= 16) return 62;
+    return 0;
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 8, `outline has ${poly?.length ?? 0} points`);
+  assert.equal(inside(poly!, cx / w, cy / h), true, "vermillion center stays inside");
+  assert.equal(inside(poly!, cx / w, 171 / h), false, "dimmer skin above the lip stays outside");
+});
+
+test("lip polygon keeps the hot lip and leaves 42 percent skin outside it", () => {
+  const w = 200, h = 250;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const cx = 100, cy = 185, rx = 18, ry = 6;
+  const score = (x: number, y: number) => {
+    const nx = (x - cx) / rx;
+    const ny = (y - cy) / ry;
+    if (nx * nx + ny * ny <= 1) return 100;
+    if (Math.abs(x - cx) <= 70 && Math.abs(y - cy) <= 14) return 42;
+    return 0;
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 8, `outline has ${poly?.length ?? 0} points`);
+  assert.equal(inside(poly!, cx / w, cy / h), true, "lip center stays inside");
+  assert.equal(inside(poly!, cx / w, (cy - 12) / h), false, "42 percent skin above the lip stays outside");
+});
+
+test("lip polygon keeps cooler commissures and excludes skin past the vermillion", () => {
+  const w = 200, h = 250;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const cx = 100, cy = 185, rx = 22, ry = 8;
+  const score = (x: number, y: number) => {
+    const nx = (x - cx) / rx;
+    const ny = (y - cy) / ry;
+    const e = nx * nx + ny * ny;
+    if (e <= 0.45) return 100;
+    if (e <= 1) return 48;
+    return 0;
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 3);
+  assert.equal(inside(poly!, cx / w, cy / h), true, "lip center stays inside");
+  assert.equal(inside(poly!, (cx + rx - 1) / w, cy / h), true, "cooler commissure stays inside");
+  assert.equal(inside(poly!, (cx + rx + 4) / w, cy / h), false, "skin past the vermillion stays outside");
+});
+
+test("upper and lower lip join across a one-cell gap without a dilated skirt", () => {
+  const w = 200, h = 250;
+  const fb: FaceBox = { x: 0, y: 0, w: 1, h: 1 };
+  const score = (x: number, y: number) => {
+    const upper = x >= 80 && x <= 120 && y >= 176 && y <= 180;
+    const lower = x >= 80 && x <= 120 && y >= 184 && y <= 188;
+    return upper || lower ? 90 : 0;
+  };
+  const poly = selectLipPolygon(w, h, fb, score);
+  assert.ok(poly && poly.length >= 3);
+  assert.equal(inside(poly!, 100 / w, 178 / h), true, "upper lip stays inside");
+  assert.equal(inside(poly!, 100 / w, 186 / h), true, "lower lip stays inside");
+  assert.equal(inside(poly!, 100 / w, 174 / h), false, "the cell above the upper lip stays outside");
+});
+
+function inside(poly: ReadonlyArray<readonly [number, number]>, x: number, y: number): boolean {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i]!, [xj, yj] = poly[j]!;
+    if (((yi > y) !== (yj > y)) && (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)) hit = !hit;
+  }
+  return hit;
+}

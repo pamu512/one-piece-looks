@@ -5,9 +5,12 @@ import {
   type Mood, type SessionInfo, type Tone,
 } from "./lib/types";
 import {
-  detectFaceWithModel, normalizeTo45, suggestLock, type FaceLandmarks,
+  detectFaceOnEncodedPhoto, normalizeTo45, suggestLock, type FaceLandmarks,
 } from "./lib/face";
+import { loadFaceFrameSession } from "./lib/faceModel";
+import { loadFaceParseSession } from "./lib/faceParse";
 import { composeShareCard, downloadBlob, shareLooksPng } from "./lib/share";
+import { warmDecode } from "./lib/warmDecode";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
@@ -120,6 +123,11 @@ export default function App() {
       ? {
           faceBox: landmarks.faceBox,
           lip: landmarks.lip as [number, number][],
+          ...(landmarks.lipInner ? { lipInner: landmarks.lipInner as [number, number][] } : {}),
+          ...(typeof landmarks.lipMeanL === "number" && Number.isFinite(landmarks.lipMeanL) ? { lipMeanL: landmarks.lipMeanL } : {}),
+          ...(typeof landmarks.lipMeanA === "number" && Number.isFinite(landmarks.lipMeanA) ? { lipMeanA: landmarks.lipMeanA } : {}),
+          ...(typeof landmarks.lipMeanB === "number" && Number.isFinite(landmarks.lipMeanB) ? { lipMeanB: landmarks.lipMeanB } : {}),
+          ...(landmarks.skin ? { skin: landmarks.skin as [number, number][] } : {}),
           eyeL: landmarks.eyeL as [number, number][],
           eyeR: landmarks.eyeR as [number, number][],
           browL: landmarks.browL as [number, number][],
@@ -165,6 +173,7 @@ export default function App() {
       }
       setStage("looks"); setPhase("building");
       const res = await api.postLooks(session.sessionId, m, e);
+      await warmDecode(res.looks.map((l) => l.imageUrl));
       setLooks(res); setBuiltPair({ mood: m, event: e });
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "The looks didn't build.";
@@ -177,6 +186,7 @@ export default function App() {
     setBusy(true); setError(null);
     try {
       const res = await api.postShuffle(session.sessionId);
+      await warmDecode(res.looks.map((l) => l.imageUrl));
       setLooks(res);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Shuffle didn't land.";
@@ -243,7 +253,12 @@ export default function App() {
 function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks | null) => void }) {
   const cam = useCamera();
 
-  useEffect(() => { void cam.start(); return () => cam.stop(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    void loadFaceFrameSession();
+    void loadFaceParseSession();
+    void cam.start();
+    return () => cam.stop();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const process = useCallback((src: string) => {
     // Normalize to the shared 4:5 frame, detect once (model when its runtime
@@ -252,7 +267,7 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
     img.onload = () => {
       const c = normalizeTo45(img);
       const dataUrl = c.toDataURL("image/jpeg", 0.92);
-      void detectFaceWithModel(c).then((lm) => onPhoto(dataUrl, lm));
+      void detectFaceOnEncodedPhoto(dataUrl, c).then((lm) => onPhoto(dataUrl, lm));
     };
     img.onerror = () => onPhoto(src, null);
     img.src = src;
@@ -270,7 +285,8 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
     const img = new Image();
     img.onload = () => {
       const c = normalizeTo45(img);
-      void detectFaceWithModel(c).then((lm) => onPhoto(c.toDataURL("image/jpeg", 0.92), lm));
+      const dataUrl = c.toDataURL("image/jpeg", 0.92);
+      void detectFaceOnEncodedPhoto(dataUrl, c).then((lm) => onPhoto(dataUrl, lm));
     };
     img.onerror = () => onPhoto(src, null);
     img.src = src;
@@ -559,7 +575,9 @@ function LooksStage({
   const goto = (i: number) => {
     const el = stripRef.current;
     if (!el) return;
-    el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    // Direct navigation (thumbs, dots) snaps: the user asked for that look,
+    // not a ride to it. Physical swipes keep their native momentum.
+    el.scrollTo({ left: i * el.clientWidth, behavior: "auto" });
   };
 
   const startHold = () => { holdTimer.current = setTimeout(() => setBare(true), 260); };

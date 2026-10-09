@@ -119,6 +119,107 @@ describe("face analysis", () => {
     expect(res.json<{ code: string }>().code).toBe("bad_lock");
   });
 
+  it("keeps lipMeanL inside 0..100 and drops a value outside that range", async () => {
+    async function statementSvg(lipMeanL: number): Promise<string> {
+      const app = makeApp();
+      const { sessionId } = await makeSession(app);
+      const face = await app.inject({
+        method: "POST",
+        url: `/api/session/${sessionId}/face`,
+        payload: { faceImageBase64: FACE_B64, lock: LOCK, landmarks: { lipMeanL } },
+      });
+      expect(face.statusCode).toBe(200);
+      const looks = await app.inject({
+        method: "POST",
+        url: `/api/session/${sessionId}/looks`,
+        payload: { mood: "Boss", event: "Office" },
+      });
+      expect(looks.statusCode).toBe(200);
+      const body = looks.json<{ looks: { role: string; imageUrl: string }[] }>();
+      const statement = body.looks.find((l) => l.role === "statement");
+      expect(statement).toBeTruthy();
+      return Buffer.from(statement!.imageUrl.split(",")[1]!, "base64").toString("utf8");
+    }
+    expect(await statementSvg(70)).toContain('data-lmean="70.00"');
+    expect(await statementSvg(100)).toContain('data-lmean="100.00"');
+    expect(await statementSvg(0)).toContain('data-lmean="0.00"');
+    expect(await statementSvg(140)).not.toContain("data-lmean=");
+  });
+
+  it("keeps lipMeanA and lipMeanB inside -128..127 and drops a value outside that range", async () => {
+    async function statementSvg(lipMeanA: number, lipMeanB: number): Promise<string> {
+      const app = makeApp();
+      const { sessionId } = await makeSession(app);
+      const face = await app.inject({
+        method: "POST",
+        url: `/api/session/${sessionId}/face`,
+        payload: {
+          faceImageBase64: FACE_B64,
+          lock: LOCK,
+          landmarks: { lipMeanL: 40, lipMeanA, lipMeanB },
+        },
+      });
+      expect(face.statusCode).toBe(200);
+      const looks = await app.inject({
+        method: "POST",
+        url: `/api/session/${sessionId}/looks`,
+        payload: { mood: "Boss", event: "Office" },
+      });
+      expect(looks.statusCode).toBe(200);
+      const body = looks.json<{ looks: { role: string; imageUrl: string }[] }>();
+      const statement = body.looks.find((l) => l.role === "statement");
+      expect(statement).toBeTruthy();
+      return Buffer.from(statement!.imageUrl.split(",")[1]!, "base64").toString("utf8");
+    }
+    const kept = await statementSvg(60, -20);
+    expect(kept).toContain('data-amean="60.00"');
+    expect(kept).toContain('data-bmean="-20.00"');
+    expect(kept).toContain('data-lmean="40.00"');
+    const ends = await statementSvg(-128, 127);
+    expect(ends).toContain('data-amean="-128.00"');
+    expect(ends).toContain('data-bmean="127.00"');
+    const highA = await statementSvg(128, 10);
+    expect(highA).not.toContain("data-amean=");
+    expect(highA).toContain('data-lmean="40.00"');
+    expect(highA).toContain('mode="color"');
+    expect(highA).not.toContain('data-shift="1.00"');
+    const lowB = await statementSvg(10, -129);
+    expect(lowB).not.toContain("data-bmean=");
+    expect(lowB).toContain('mode="color"');
+  });
+
+  it("keeps a skin polygon and the straight lip shift", async () => {
+    const app = makeApp();
+    const { sessionId } = await makeSession(app);
+    const skin = [[0.3, 0.2], [0.7, 0.2], [0.72, 0.8], [0.28, 0.82]];
+    const face = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/face`,
+      payload: {
+        faceImageBase64: FACE_B64,
+        lock: LOCK,
+        landmarks: {
+          lipMeanL: 46, lipMeanA: 30, lipMeanB: 16,
+          skin,
+        },
+      },
+    });
+    expect(face.statusCode).toBe(200);
+    const looks = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Boss", event: "Office" },
+    });
+    expect(looks.statusCode).toBe(200);
+    const body = looks.json<{ looks: { role: string; imageUrl: string }[] }>();
+    const statement = body.looks.find((l) => l.role === "statement");
+    expect(statement).toBeTruthy();
+    const svg = Buffer.from(statement!.imageUrl.split(",")[1]!, "base64").toString("utf8");
+    expect(svg).toContain('data-skin="1"');
+    expect(svg).toContain("300.0,250.0");
+    expect(svg).toContain('data-shift="1.00"');
+  });
+
   it("rejects a bad category", async () => {
     const { sessionId } = await makeSession(app);
     const res = await runFace(app, sessionId, {
