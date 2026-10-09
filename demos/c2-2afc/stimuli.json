@@ -1,5 +1,5 @@
 {
-  "t": "2026-10-09T07:36:35.781Z",
+  "t": "2026-10-09T08:07:53.151Z",
   "mood": "Soft",
   "event": "Casual",
   "trialsPerPair": 3,
@@ -228,25 +228,17 @@
     }
   ],
   "filesOpaque": {
-    "face-a-curly-Anchor-e6fc3eb75079.png": "r1149814cbe191feb.png",
-    "face-a-curly-Lift-dcdb02c5d201.png": "r8055548bff63019a.png",
-    "face-a-curly-Lift-fd6a47d1e8d6.png": "ra76e217d61447d01.png",
-    "face-a-curly-Statement-9473b06f1b83.png": "r2a684e513938867d.png",
-    "face-a-curly-Statement-9c258ee3dde1.png": "r80c8ea02860d5b0d.png",
-    "face-b-pulled-back-Anchor-55124e757e29.png": "r402d022af70fbcee.png",
-    "face-b-pulled-back-Lift-c203570671b0.png": "r4c8256cb01c5db65.png",
-    "face-b-pulled-back-Lift-e904d58ed345.png": "rd03ac2fad47b7210.png",
-    "face-b-pulled-back-Statement-54a122755690.png": "r65c1c68e0be1778c.png",
-    "face-b-pulled-back-Statement-9a3e3681de3c.png": "r79f245a769d2f9a7.png",
-    "face-c-blonde-Anchor-5214f7b2102b.png": "r9d02929dd1409934.png",
-    "face-c-blonde-Lift-84fc2f5ee6c5.png": "r9851f8380f701706.png",
-    "face-c-blonde-Lift-864a78d07eda.png": "re24167e10779b778.png",
-    "face-c-blonde-Statement-d3ef2f716ed0.png": "r4d11590116e9738f.png",
-    "face-c-blonde-Statement-d7cb7eaf57e7.png": "r6eac025e56ae349f.png",
-    "face-d-tan-Anchor-e824e2432b68.png": "r97987e5027bea5bd.png",
-    "face-d-tan-Lift-2859ef7a1053.png": "red4168c1a42aefd6.png",
-    "face-d-tan-Lift-7b3ce87c7968.png": "r71f752565447f276.png",
-    "face-d-tan-Statement-1d0434a0ef33.png": "r853e7d0f6902d2ca.png",
-    "face-d-tan-Statement-e05bb6d37c08.png": "rb167f09870804ae8.png"
+    "face-a-curly-Anchor": "re99bf38dc274.png",
+    "face-a-curly-Lift": "r101076ed2408.png",
+    "face-a-curly-Statement": "r22eabab746e2.png",
+    "face-b-pulled-back-Anchor": "rc2ef688efd6b.png",
+    "face-b-pulled-back-Lift": "r3932928e73aa.png",
+    "face-b-pulled-back-Statement": "re95480f55abb.png",
+    "face-c-blonde-Anchor": "re88c07c78a85.png",
+    "face-c-blonde-Lift": "rd8d9a03dd7fd.png",
+    "face-c-blonde-Statement": "rcf8a1c578c7b.png",
+    "face-d-tan-Anchor": "rbd21f4c43dba.png",
+    "face-d-tan-Lift": "rfe2b136760a5.png",
+    "face-d-tan-Statement": "rd110fe62dba8.png"
   }
 }

@@ -151,6 +151,7 @@ async function rendersForFace(face) {
 }
 
 const pairs = [["Anchor", "Lift"], ["Lift", "Statement"], ["Anchor", "Statement"]];
+const opaqueByFace = {};
 const trials = [];
 
 for (const face of FACES) {
@@ -158,13 +159,16 @@ for (const face of FACES) {
   const roleSrcs = await rendersForFace(face);
   // Rasterize each role once per face; trials reuse the pngs.
   const pngs = {};
+  const opaqueOf = {};
   for (const role of ["Anchor", "Lift", "Statement"]) {
     // Opaque name: the judge must not read roles from filenames.
     const opaque = `r${hash(face + role + roleSrcs[role])}.png`;
     const p = join(RENDERS, opaque);
     if (!existsSync(p)) await rasterize(roleSrcs[role], p);
     pngs[role] = `renders/${opaque}`;
+    opaqueOf[role] = opaque;
   }
+  opaqueByFace[face] = opaqueOf;
   for (const [a, b] of pairs) {
     const rng = mulberry32(hash(`${face}|${a}|${b}`) .charCodeAt(0) * 7919 + face.length);
     for (let t = 0; t < TRIALS; t++) {
@@ -188,6 +192,10 @@ writeFileSync(join(OUT, "stimuli.json"), JSON.stringify({
   mood: MOOD, event: EVENT, trialsPerPair: TRIALS,
   faces: FACES,
   key: trials.map((t) => ({ id: t.id, pair: t.pair, leftIsA: t.leftIsA, moreMadeUp: t.moreMadeUp })),
+  filesOpaque: Object.fromEntries(
+    Object.entries(opaqueByFace).flatMap(([face, m]) =>
+      Object.entries(m).map(([role, f]) => [`${face}-${role}`, f])),
+  ),
 }, null, 2));
 
 // The BLIND trial list the page reads: image paths + ids only, no roles.

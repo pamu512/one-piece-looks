@@ -128,13 +128,50 @@ const SUPPORT_PEAK: Record<string, number> = {
 
 const SUPPORT_CAP: Record<string, number> = {
   lip_color: 0.9,
-  blush: 0.7,
+  // Blush cap sits just under the statement-scaled low-intensity value so a
+  // higher colorIntensity still reads stronger at full statement (C2 gain).
+  blush: 0.76,
   eye_shadow: 0.55,
   eye_liner: 0.75,
   eyebrows: 0.55,
   eyelashes: 0.8,
   contour: 0.5,
   highlighter: 0.4,
+};
+
+/**
+ * Statement step gain (C2 2AFC finding, 2026-10-09). The blind gate passed
+ * overall but face-a-curly scored at chance: measured on the trial images,
+ * Lift->Statement moved cheek/eye luma only 1-3/255 vs Anchor->Lift's 10-17
+ * on EVERY face. Statement's extras (contour, shadow, liner, highlighter)
+ * are individually low-peak and L-preserving, so their sum sat under the
+ * human JND, worst on deep skin. Role-scaled alphas already exist, but the
+ * peak tables above are shared across roles - the statement render caps far
+ * below what the role implies. This gain lifts statement support layers
+ * above their shared peak, capped: the third beat must land as a step you
+ * can see in a blind pair, not a wash you must squint at. Lift stays put -
+ * Anchor->Lift measured strong everywhere.
+ */
+const STATEMENT_GAIN: Record<string, number> = {
+  blush: 1.25,
+  eye_shadow: 1.3,
+  eye_liner: 1.15,
+  eyebrows: 1.25,
+  eyelashes: 1.15,
+  contour: 1.5,
+  highlighter: 1.35,
+};
+
+/**
+ * Statement chroma multiplier per support category: 1.5 means the encoded-LAB
+ * flood's a/b are scaled 1.5x about 0 (more saturated, same hue). This is the
+ * second half of the C2 fix: alpha raises coverage, chroma raises richness.
+ */
+const STATEMENT_CHROMA: Record<string, number> = {
+  blush: 1.55,
+  eye_shadow: 1.4,
+  contour: 1.45,
+  highlighter: 1.2,
 };
 
 /** Brow / lash / liner read as powder on lift and statement, not a flat black stamp. */
@@ -213,14 +250,20 @@ export function intensityStretch(colorIntensity: number | undefined): number {
   return t < 0.7 ? t : 0.7 + (t - 0.7) * 2.6;
 }
 
-/** Mask alpha for one zone. Role scales it; the hex does not change. */
+/**
+ * Mask alpha for one zone. Role scales it; the hex does not change.
+ * Statement support layers ride STATEMENT_GAIN above the shared peak
+ * (C2 finding above): the raw is scaled BEFORE the cap so the cap still
+ * owns the ceiling - the third beat gets louder, never unbounded.
+ */
 export function zoneAlpha(category: string, colorIntensity: number | undefined, role: string): number {
   const roleF = role === "statement" ? 1 : role === "lift" ? 0.74 : 0.46;
   const s = intensityStretch(colorIntensity);
   const peak = SUPPORT_PEAK[category] ?? 0.4;
   const cap = SUPPORT_CAP[category] ?? 0.55;
   const gain = 0.78 + Math.min(s, 1.3) * 0.22;
-  const raw = peak * roleF * gain;
+  const step = role === "statement" ? (STATEMENT_GAIN[category] ?? 1) : 1;
+  const raw = peak * roleF * gain * step;
   if (!Number.isFinite(raw)) return 0;
   return Math.min(cap, Math.max(0, raw));
 }
@@ -1422,6 +1465,9 @@ interface Job {
   /** Class-1 skin (or the face oval) the blush gaussian is clipped to. */
   skin?: Array<[number, number]> | undefined;
   skinHoles?: Array<Array<[number, number]>> | undefined;
+  /** Encoded-LAB a/b push for this job (statement chroma step, C2). 0 = none. */
+  chromaA?: number | undefined;
+  chromaB?: number | undefined;
 }
 
 /** Lip-only job: the coverage mask + sRGB blend parameters. */
@@ -1588,13 +1634,18 @@ function decodeStep(p: string, enc: string): { xml: string; out: string } {
 }
 
 /** Lerp a/b by mask alpha and L by mask * lightness. Stays in encoded LAB. */
-function lerpEncoded(p: string, enc: string, maskId: string, flood: string, alpha: number, lightness: number, sigma: number): { xml: string; out: string } {
+function lerpEncoded(p: string, enc: string, maskId: string, flood: string, alpha: number, lightness: number, sigma: number, chroma?: { a: number; b: number }): { xml: string; out: string } {
   const out = `${p}o`;
+  // Statement chroma step: the flood is an encoded-LAB hex; push its a/b
+  // channels by the job's delta before any blending. The feFlood color is
+  // sRGB, so apply the shift as a matrix on the flood AFTER a re-encode:
+  // simpler and exact - shift the flood hex itself in TS (see floodChroma).
+  const floodOut = chroma ? floodChroma(flood, chroma.a, chroma.b) : flood;
   const xml = [
     `<feImage href="#${maskId}" x="0" y="0" width="${CANVAS_W}" height="${CANVAS_H}" preserveAspectRatio="none" result="${p}sh"/>`,
     `<feGaussianBlur in="${p}sh" stdDeviation="${sigma.toFixed(3)}" result="${p}bl"/>`,
     `<feComponentTransfer in="${p}bl" result="${p}mk"><feFuncA type="linear" slope="${alpha.toFixed(4)}" intercept="0"/></feComponentTransfer>`,
-    `<feFlood flood-color="${flood}" flood-opacity="1" result="${p}fl"/>`,
+    `<feFlood flood-color="${floodOut}" flood-opacity="1" result="${p}fl"/>`,
     `<feComposite in="${p}fl" in2="${p}mk" operator="in" result="${p}tm"/>`,
     `<feBlend in="${p}tm" in2="${enc}" mode="normal" result="${p}fu"/>`,
     `<feComponentTransfer in="${p}mk" result="${p}ml"><feFuncA type="linear" slope="${lightness.toFixed(4)}" intercept="0"/></feComponentTransfer>`,
@@ -1606,6 +1657,17 @@ function lerpEncoded(p: string, enc: string, maskId: string, flood: string, alph
     matrix(`${p}mg`, out, "1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 0 1"),
   ].join("");
   return { xml, out };
+}
+
+/** Shift an encoded-LAB flood hex by (dA, dB) in encoded units. */
+function floodChroma(flood: string, dA: number, dB: number): string {
+  const rgb = hexToRgb(flood);
+  if (!rgb) return flood;
+  // flood hex is already encoded units stored as sRGB bytes; shift G/B.
+  const r = Math.round(Math.min(255, Math.max(0, rgb[0])));
+  const g = Math.round(Math.min(255, Math.max(0, rgb[1] + dA)));
+  const b = Math.round(Math.min(255, Math.max(0, rgb[2] + dB)));
+  return rgbHex(r, g, b);
 }
 
 /**
@@ -1715,8 +1777,14 @@ function veilSteps(srcPhoto: string, cur: string, maskId: string, focus: number,
   const parts = [`<feImage href="#${maskId}" x="0" y="0" width="${CANVAS_W}" height="${CANVAS_H}" preserveAspectRatio="none" result="vsh"/>`];
   let name = cur;
   if (focus > 0) {
+    // Soft-focus the COMPOSITE (bare + under-layers), not the bare photo.
+    // Blurring the bare photo and overlaying it re-buried the under-veil
+    // makeup: statement's stronger veil (smooth 45 vs 35) attenuated its own
+    // blush/contour/shadow to (1 - focus) ~ 15%, which is why Lift->Statement
+    // measured 1-3/255 while Anchor->Lift measured 10-17 (C2 2026-10-09).
+    // Blurring cur keeps the paint in both blend terms and smooths texture.
     parts.push(
-      `<feGaussianBlur in="${srcPhoto}" stdDeviation="3.400" result="vbb"/>`,
+      `<feGaussianBlur in="${cur}" stdDeviation="3.400" result="vbb"/>`,
       `<feComponentTransfer in="vsh" result="vfm"><feFuncA type="linear" slope="${focus.toFixed(4)}" intercept="0"/></feComponentTransfer>`,
       `<feComposite in="vbb" in2="vfm" operator="in" result="vbc"/>`,
       `<feBlend in="vbc" in2="${name}" mode="normal" result="vbf"/>`,
@@ -1783,9 +1851,29 @@ function buildJob(e: VtoEffect, role: string, lm: FaceLandmarks | undefined, jit
   const skin = category === "blush" ? skinCoverage(lm) : undefined;
   // The cheek gaussian is the falloff. A wide support blur would tint past the skin edge.
   const blur = category === "blush" ? Math.min(sigma, 0.8) : sigma;
+  // Statement chroma step (C2): even with the veil fixed and alphas raised,
+  // Lift->Statement measured only ~2/255 luma because the support paints sit
+  // near skin chroma. Alpha alone cannot fix that - the third beat's paint
+  // itself must read warmer/richer. Push the job's encoded-LAB flood outward
+  // along its own a/b direction so saturation rises, not hue.
+  let chromaA: number | undefined;
+  let chromaB: number | undefined;
+  if (role === "statement") {
+    const boost = STATEMENT_CHROMA[category];
+    if (boost) {
+      const rgbPaint = hexToRgb(paint);
+      if (rgbPaint) {
+        const lab = srgbToLab(rgbPaint[0], rgbPaint[1], rgbPaint[2]);
+        // Scale a/b about mid-gray chroma (0) toward more saturation.
+        chromaA = lab.a * (boost - 1);
+        chromaB = lab.b * (boost - 1);
+      }
+    }
+  }
   return {
     category, paint, alpha, lightness, sigma: blur, kernel, stamps, falloff,
     ...(skin ? { skin: skin.skin, skinHoles: skin.holes } : {}),
+    ...(chromaA !== undefined && chromaB !== undefined ? { chromaA, chromaB } : {}),
   };
 }
 
@@ -1949,7 +2037,8 @@ export function faceCardSvg(
     list.forEach((job, i) => {
       const id = `${prefix}${i}`;
       defs.push(jobSvg(job, id));
-      const step = lerpEncoded(id, enc, id, floodFor(job.paint), job.alpha, job.lightness, job.sigma);
+      const step = lerpEncoded(id, enc, id, floodFor(job.paint), job.alpha, job.lightness, job.sigma,
+        job.chromaA !== undefined && job.chromaB !== undefined ? { a: job.chromaA, b: job.chromaB } : undefined);
       prims.push(step.xml);
       enc = step.out;
     });
