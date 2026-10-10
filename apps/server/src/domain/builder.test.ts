@@ -88,10 +88,10 @@ describe("builder: structure invariants", () => {
     }
   });
 
-  it("anchor is near-bare: lock + smoothing only", () => {
+  it("anchor is near-bare: the lock and nothing else (no smoothing)", () => {
     const anchor = looks[0]!;
     const categories = anchor.effects.map((e) => String(e.category));
-    expect(categories.filter((c) => c !== "skin_smooth" && c !== "lip_color")).toHaveLength(0);
+    expect(categories).toEqual(["lip_color"]);
   });
 
   it("lift is the nameable step: lash definition + brow + cheekbone blush (P0-1)", () => {
@@ -112,7 +112,7 @@ describe("builder: structure invariants", () => {
     const cats = st.effects.map((e) => String(e.category));
     expect(cats).toContain("contour");
     expect(cats).toContain("eyelashes");
-    expect(cats.filter((c) => c !== "skin_smooth").length).toBeGreaterThanOrEqual(5);
+    expect(cats.length).toBeGreaterThanOrEqual(5);
   });
 
   it("eyebrows shape patterns always carry curvature, thickness AND definition (live-pinned 2026-10-02)", () => {
@@ -148,7 +148,8 @@ describe("builder: structure invariants", () => {
   it("effect categories use the live YouCam consts (live-pinned 2026-10-05)", () => {
     // "brow" is not an accepted category value on live YouCam; the const is
     // "eyebrows" (400 oneOf validation otherwise). Lock categories stay ours.
-    const allowed = new Set(["skin_smooth", "lip_color", "blush", "eyebrows", "eye_shadow", "eye_liner", "eyelashes", "contour", "highlighter"]);
+    // Honesty clause (v2): skin_smooth is never a builder output.
+    const allowed = new Set(["lip_color", "blush", "eyebrows", "eye_shadow", "eye_liner", "eyelashes", "contour", "highlighter"]);
     for (const category of ["lip", "cheek", "eye", "brow", "liner"] as const) {
       for (const look of buildLooks({ ...base, lock: { ...base.lock, category } })) {
         for (const eff of look.effects) {
@@ -254,10 +255,76 @@ describe("builder: structure invariants", () => {
   });
 
   it("intensity is monotonic anchor <= lift <= statement", () => {
-    const layerCount = (l: (typeof looks)[number]) =>
-      l.effects.filter((e) => e.category !== "skin_smooth").length;
+    const layerCount = (l: (typeof looks)[number]) => l.effects.length;
     expect(layerCount(looks[0]!)).toBeLessThanOrEqual(layerCount(looks[1]!));
     expect(layerCount(looks[1]!)).toBeLessThanOrEqual(layerCount(looks[2]!));
+  });
+});
+
+describe("honesty clause: no retouching, ever", () => {
+  // v2 contract (2026-10-10): renders never contain skin_smooth or any face
+  // reshaping effect. Deterministic seeds; the builder is pure, so any
+  // failure here is a real regression, not flake.
+  const CATEGORIES = ["lip", "cheek", "eye", "brow", "liner"] as const;
+  const MOODS = ["Bitch mode", "Boss", "Demure", "Owning it", "Sexy", "Soft", "Clean", "Main character"] as const;
+  const EVENTS = ["Dinner date", "Office", "Casual", "Workout", "Night out", "Wedding guest", "Errands", "Interview"] as const;
+  const SKIN_TYPES = ["Normal", "Oily", "Dry", "Combination", "Redness", "Dry & Redness", "Oily & Redness", "Combination & Redness"] as const;
+  /** Retouch/reshape categories the contract forbids in any built look. */
+  const FORBIDDEN = new Set(["skin_smooth"]);
+
+  const assertHonest = (looks: ReturnType<typeof buildLooks>, where: string) => {
+    for (const look of looks) {
+      for (const e of look.effects) {
+        expect(FORBIDDEN.has(String(e.category)), `${where}: ${look.role} effect ${String(e.category)}`).toBe(false);
+      }
+    }
+  };
+
+  it("all 5 lock categories build honest looks (every role)", () => {
+    for (const category of CATEGORIES) {
+      assertHonest(buildLooks({ ...base, lock: { ...base.lock, category } }), `lock=${category}`);
+    }
+  });
+
+  it("all 64 mood/event pairs at lock=lip build honest looks", () => {
+    let n = 0;
+    for (const mood of MOODS) {
+      for (const event of EVENTS) {
+        assertHonest(buildLooks({ ...base, mood, event }), `mood=${mood} event=${event}`);
+        n += 1;
+      }
+    }
+    expect(n).toBe(64);
+  });
+
+  it("every skin type builds honest looks (oil rule paths)", () => {
+    for (const skinType of SKIN_TYPES) {
+      assertHonest(buildLooks({ ...base, skinType }), `skinType=${skinType}`);
+    }
+  });
+
+  it("api and picker tones, multiple seeds, build honest looks", () => {
+    for (const seed of [1, 7, 42, 1234]) {
+      assertHonest(buildLooks({ ...base, seed }), `seed=${seed}`);
+      assertHonest(
+        buildLooks({ ...base, tone: { source: "picker", depth: "06", temperature: "cool" }, seed }),
+        `seed=${seed} picker`,
+      );
+    }
+  });
+
+  it("no builder effect mutates face geometry: no reshape/slim/enlarge categories", () => {
+    // Beyond skin_smooth, belt-and-braces: none of the YouCam reshape-style
+    // categories may appear. The builder only emits color/pattern paint.
+    const reshape = new Set([
+      "skin_smooth", "face_reshape", "jaw_slim", "eye_enlarge", "face_slim",
+      "nose_resize", "lip_resize", "eye_resize", "jaw_resize", "teeth_whitening",
+    ]);
+    for (const category of CATEGORIES) {
+      for (const look of buildLooks({ ...base, lock: { ...base.lock, category } })) {
+        for (const e of look.effects) expect(reshape.has(String(e.category))).toBe(false);
+      }
+    }
   });
 });
 
