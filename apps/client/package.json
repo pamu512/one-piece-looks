@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "test": "tsc -b --pretty false && node --experimental-strip-types --test src/lib/*.test.ts"
+    "test": "tsc -b --pretty false && node --experimental-strip-types --test src/lib/*.test.ts src/lib/coach/*.test.ts"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^1.1.0",

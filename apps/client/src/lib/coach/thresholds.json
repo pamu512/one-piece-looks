@@ -1,0 +1,11 @@
+{
+  "$comment": "Face-shape cascade thresholds, FACE-GEOMETRY.md section 4. Placeholder values (CAL-TBD) until the WFLW percentile calibration (scripts/train/wflw-bands.py pattern) writes this file. Versioned so retuning never touches code.",
+  "version": 0,
+  "calibration": "hand-placeholder 2026-10-10; replace via WFLW percentile export",
+  "FLPR": { "longMin": 1.6, "roundMax": 1.15, "squareMax": 1.3 },
+  "jawAng": { "roundMinDeg": 155, "squareMaxDeg": 140 },
+  "JBR": { "squareMin": 0.92 },
+  "FBR": { "heartMin": 1.18 },
+  "triangle": { "jawOverForehead": 1.08 },
+  "diamond": { "cheekOverForehead": 1.06, "cheekOverJaw": 1.12, "chinPointedMaxDeg": 150 }
+}
