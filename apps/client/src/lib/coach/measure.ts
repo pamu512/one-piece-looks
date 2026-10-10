@@ -108,11 +108,11 @@ function angleAt(points: Map<number, { x: number; y: number }>, v: number, a: nu
   const pv = get(points, v);
   const pa = get(points, a);
   const pb = get(points, b);
-  const v1 = [pa.x - pv.x, pa.y - pv.y];
-  const v2 = [pb.x - pv.x, pb.y - pv.y];
-  const m = Math.hypot(v1[0], v1[1]) * Math.hypot(v2[0], v2[1]);
+  const v1x = pa.x - pv.x, v1y = pa.y - pv.y;
+  const v2x = pb.x - pv.x, v2y = pb.y - pv.y;
+  const m = Math.hypot(v1x, v1y) * Math.hypot(v2x, v2y);
   if (m === 0) return 180;
-  const d = (v1[0] * v2[0] + v1[1] * v2[1]) / m;
+  const d = (v1x * v2x + v1y * v2y) / m;
   return (Math.acos(Math.max(-1, Math.min(1, d))) * 180) / Math.PI;
 }
 
