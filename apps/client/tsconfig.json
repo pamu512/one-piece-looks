@@ -9,7 +9,7 @@
     "noEmit": true,
     "isolatedModules": true,
     "useDefineForClassFields": true,
-    "allowImportingTsExtensions": false,
+    "allowImportingTsExtensions": true,
     "types": ["vite/client"]
   },
   "include": ["src", "vite.config.ts"],

@@ -1,0 +1,73 @@
+{
+  "$comment1": "MUA knowledge as data - FACE-GEOMETRY.md section 6. One canonical chart system: the classic contour-chart taxonomy (oval/round/square/long/heart/diamond/triangle). Editable without code; every rule carries source provenance.",
+  "$comment2": "Copy rule: verbs about light and placement (lengthen, soften, lift, define). Never flaw language (fix, slim, problem, reduce). plan.ts validates verbs against this stance.",
+  "schema": 1,
+  "school": "classic contour-chart taxonomy (single canonical system, cited)",
+  "verbs": {
+    "contour": "define",
+    "contour_soft": "soften",
+    "lift": "lift",
+    "lengthen": "lengthen",
+    "brighten": "brighten",
+    "warm": "warm"
+  },
+  "shapes": {
+    "long": {
+      "contour": { "ribbons": ["hairline_top", "under_chin"], "note": "shorten the vertical read with light at the top and below the chin", "source": "chart-ref long-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 5, "height": "mid", "source": "chart-ref long-2" },
+      "brow": { "arch": "flat", "source": "chart-ref long-3" },
+      "highlight": { "zones": ["cheek_apple"], "source": "chart-ref long-4" }
+    },
+    "round": {
+      "contour": { "ribbons": ["temple_L", "temple_R", "jaw_L", "jaw_R"], "note": "light along the outer thirds for a lengthened read", "source": "chart-ref round-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 25, "height": "high", "source": "chart-ref round-2" },
+      "brow": { "arch": "defined", "source": "chart-ref round-3" },
+      "highlight": { "zones": ["chin_ball", "under_eye"], "source": "chart-ref round-4" }
+    },
+    "square": {
+      "contour": { "ribbons": ["jaw_L", "jaw_R", "temple_L", "temple_R"], "note": "round the corners with soft light at the angles", "source": "chart-ref square-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "placement": "round", "source": "chart-ref square-2" },
+      "brow": { "arch": "soft", "source": "chart-ref square-3" }
+    },
+    "heart": {
+      "contour": { "ribbons": ["temple_L", "temple_R"], "note": "balance the upper width with light at the temples", "source": "chart-ref heart-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 10, "height": "low", "source": "chart-ref heart-2" },
+      "brow": { "arch": "rounded", "source": "chart-ref heart-3" },
+      "highlight": { "zones": ["chin_ball"], "source": "chart-ref heart-4" }
+    },
+    "diamond": {
+      "contour": { "ribbons": ["cheek_shelf_L", "cheek_shelf_R"], "note": "soften the widest point along the cheekbone line", "source": "chart-ref diamond-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 20, "height": "high", "source": "chart-ref diamond-2" },
+      "brow": { "arch": "soft", "source": "chart-ref diamond-3" },
+      "highlight": { "zones": ["forehead_center", "chin_ball"], "source": "chart-ref diamond-4" }
+    },
+    "triangle": {
+      "contour": { "ribbons": ["jaw_L", "jaw_R"], "note": "carry light up and away along the jaw line", "source": "chart-ref triangle-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "source": "chart-ref triangle-2" },
+      "brow": { "arch": "defined", "source": "chart-ref triangle-3" },
+      "highlight": { "zones": ["forehead_center"], "source": "chart-ref triangle-4" }
+    },
+    "oval": {
+      "contour": { "ribbons": [], "note": "balanced canvas: placement follows the feature, not a correction", "source": "chart-ref oval-1" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "source": "chart-ref oval-2" },
+      "brow": { "arch": "natural", "source": "chart-ref oval-3" },
+      "highlight": { "zones": ["cheek_apple", "cupid_bow"], "source": "chart-ref oval-4" }
+    }
+  },
+  "brushDirections": {
+    "hairline_top": "hairline inward, feathered",
+    "under_chin": "jaw edge downward, feathered",
+    "temple_L": "temple downward toward the cheekbone",
+    "temple_R": "temple downward toward the cheekbone",
+    "jaw_L": "jaw corner upward toward the ear",
+    "jaw_R": "jaw corner upward toward the ear",
+    "cheek_shelf_L": "ear toward the mouth corner, stop short",
+    "cheek_shelf_R": "ear toward the mouth corner, stop short",
+    "cheek_apple": "apples outward toward the temple at the blush angle",
+    "under_eye": "inner corner outward, press don't drag",
+    "chin_ball": "center of the chin, small circles",
+    "forehead_center": "center of the forehead outward, feathered",
+    "cupid_bow": "bow peak, one tap each side",
+    "nose_bridge": "bridge of the nose, top down, one pass"
+  }
+}
