@@ -53,7 +53,7 @@ test("measurements are invariant to roll and uniform scale", () => {
   const rolled = measureFace(rollBy(canonicalFrontal(), 9))!;
   const tiny = canonicalFrontal().map((p) => ({ x: p.x * 0.31, y: p.y * 0.31, z: p.z }));
   const scaled = measureFace(tiny)!;
-  for (const key of ["FLPR", "JBR", "FBR", "jawAng", "chinAng"] as const) {
+  for (const key of ["FLPR", "JBR", "FBR", "HWR", "jawAng", "chinAng"] as const) {
     assert.ok(Math.abs(base[key] - rolled[key]) < 1e-6, `${key} roll-invariant`);
     assert.ok(Math.abs(base[key] - scaled[key]) < 1e-6, `${key} scale-invariant`);
   }
@@ -72,6 +72,17 @@ test("FL, CW, JW, FW, MW match direct landmark distances (IOD units)", () => {
   assert.ok(Math.abs(m.JW - d(172, 397)) < 1e-9);
   assert.ok(Math.abs(m.FW - d(103, 332)) < 1e-9);
   assert.ok(Math.abs(m.MW - d(61, 291)) < 1e-9);
+  assert.ok(Math.abs(m.HWR - m.FW / m.CW) < 1e-9, "HWR is FW/CW");
+});
+
+test("HWR grows when the temples move out and the cheeks stay put", () => {
+  const base = measureFace(canonicalFrontal())!;
+  const wider = canonicalFrontal();
+  wider[103] = { x: 0.22, y: wider[103]!.y, z: 0 };
+  wider[332] = { x: 0.78, y: wider[332]!.y, z: 0 };
+  const moved = measureFace(wider)!;
+  assert.ok(moved.HWR > base.HWR, `wider hairline ${moved.HWR.toFixed(3)} > ${base.HWR.toFixed(3)}`);
+  assert.ok(Math.abs(moved.CW - base.CW) < 1e-9, "cheek width unchanged");
 });
 
 test("yaw gate: past 6% of face width the face is refused (null)", () => {
@@ -90,6 +101,27 @@ test("yaw proxy grows monotonically with shear and the gate sits at 6%", () => {
   assert.ok(y0 < y1 && y1 < y2, `yaw proxy monotonic: ${y0.toFixed(3)} < ${y1.toFixed(3)} < ${y2.toFixed(3)}`);
   assert.ok(y1 <= YAW_GATE, "small yaw inside the gate");
   assert.ok(y2 > YAW_GATE, "big yaw outside the gate");
+});
+
+test("a zero width that would divide HWR or FBR is refused", () => {
+  const cheeks = canonicalFrontal();
+  cheeks[356] = { x: cheeks[127]!.x, y: cheeks[127]!.y, z: 0 };
+  assert.equal(measureFace(cheeks), null);
+  const jaw = canonicalFrontal();
+  jaw[397] = { x: jaw[172]!.x, y: jaw[172]!.y, z: 0 };
+  assert.equal(measureFace(jaw), null);
+});
+
+test("non-finite landmarks and overflowed coordinates are refused", () => {
+  for (const x of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    const face = canonicalFrontal();
+    face[10] = { x, y: 0.12, z: 0 };
+    assert.equal(measureFace(face), null);
+  }
+  const huge = canonicalFrontal();
+  huge[10] = { x: 1e308, y: 1e308, z: 0 };
+  huge[152] = { x: -1e308, y: -1e308, z: 0 };
+  assert.equal(measureFace(huge), null);
 });
 
 test("degenerate inputs are refused, not thrown", () => {

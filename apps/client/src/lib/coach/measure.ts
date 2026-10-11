@@ -38,6 +38,8 @@ export interface FaceMeasurements {
   JBR: number;
   /** forehead balance FW / JW */
   FBR: number;
+  /** hairline width ratio FW / CW; forehead versus cheekbone */
+  HWR: number;
   /** jaw corner angularity, deg; average of both jaw-corner angles */
   jawAng: number;
   /** chin pointedness, deg; angle at 152 between 172 and 397 */
@@ -153,7 +155,8 @@ export function normalizeFace(landmarks: readonly CoachPoint[]): NormalizedFace 
 
 /**
  * The section 3 measurement set on an already-normalized face. Returns null
- * on the yaw gate (not frontal) - callers refuse to classify.
+ * on the yaw gate (not frontal), a zero width, or a non-finite ratio.
+ * Callers refuse to classify.
  */
 export function measureFace(landmarks: readonly CoachPoint[]): FaceMeasurements | null {
   const norm = normalizeFace(landmarks);
@@ -178,13 +181,14 @@ export function measureFace(landmarks: readonly CoachPoint[]): FaceMeasurements 
   const aR = angleAt(pts, MEASURE_INDICES.jawR, nr1, nr2) / 2 + angleAt(pts, MEASURE_INDICES.jawR, nr2, MEASURE_INDICES.chin) / 2;
   const jawAng = (aL + aR) / 2;
   const chinAng = angleAt(pts, MEASURE_INDICES.chin, MEASURE_INDICES.jawL, MEASURE_INDICES.jawR);
+  const FLPR = FL / CW;
+  const JBR = JW / CW;
+  const FBR = FW / JW;
+  const HWR = FW / CW;
+  if (![FLPR, JBR, FBR, HWR, jawAng, chinAng].every(Number.isFinite)) return null;
 
   return {
     FL, CW, JW, FW, MW,
-    FLPR: FL / CW,
-    JBR: JW / CW,
-    FBR: FW / JW,
-    jawAng,
-    chinAng,
+    FLPR, JBR, FBR, HWR, jawAng, chinAng,
   };
 }
