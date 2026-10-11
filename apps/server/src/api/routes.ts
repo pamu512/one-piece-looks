@@ -105,6 +105,8 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
   const lipMeanL = labL(r.lipMeanL);
   const lipMeanA = labAB(r.lipMeanA);
   const lipMeanB = labAB(r.lipMeanB);
+  const SHAPES = ["long", "round", "square", "heart", "triangle", "diamond", "oval"];
+  const shape = typeof r.faceShape === "string" && SHAPES.includes(r.faceShape) ? r.faceShape : undefined;
   const lm: FaceLandmarks = {
     ...(box(r.faceBox) ? { faceBox: box(r.faceBox) } : {}),
     ...(poly(r.lip) ? { lip: poly(r.lip) } : {}),
@@ -119,6 +121,7 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
     ...(poly(r.browR) ? { browR: poly(r.browR) } : {}),
     ...(poly(r.cheekL) ? { cheekL: poly(r.cheekL) } : {}),
     ...(poly(r.cheekR) ? { cheekR: poly(r.cheekR) } : {}),
+    ...(shape ? { faceShape: shape } : {}),
   };
   return Object.keys(lm).length > 0 ? lm : undefined;
 }

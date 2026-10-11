@@ -65,6 +65,11 @@ export interface FaceLandmarks {
   readonly browR?: FacePoly | undefined;
   readonly cheekL?: FacePoly | undefined;
   readonly cheekR?: FacePoly | undefined;
+  /**
+   * Client-classified face shape (coach cascade) driving shape-aware
+   * contour placement. Absent: the static symmetric jaw patches are used.
+   */
+  readonly faceShape?: string | undefined;
 }
 
 interface Ellipse {
@@ -1341,9 +1346,54 @@ function stampsFor(category: string, lm: FaceLandmarks | undefined): Stamp[] {
       const f = lm?.faceBox;
       if (usableBox(f)) {
         if (category === "contour") {
-          const cy = (f.y + f.h * 0.62) * CANVAS_H;
-          const mk = (frac: number) => stampFrom(roundedPoly((f.x + f.w * frac) * CANVAS_W, cy, f.w * CANVAS_W * 0.08, f.h * CANVAS_H * 0.1, 12));
-          return mirrorStamps([mk(0.14), mk(0.86)], lm);
+          // Shape-aware placement (rules.json schema 2, e.l.f. guide-cited):
+          // the chart system places shadow by face shape, not one static
+          // patch pair. Ribbons are approximated from the face box; the
+          // mesh-ribbon rendering lives client-side for the coach overlay.
+          const shape = lm?.faceShape;
+          const W = CANVAS_W, H = CANVAS_H;
+          const mkRibbon = (x0: number, x1: number, y0: number, y1: number, wFrac: number) => {
+            const cx = (f.x + f.w * (x0 + x1) / 2) * W;
+            const cy = (f.y + f.h * (y0 + y1) / 2) * H;
+            return stampFrom(roundedPoly(cx, cy, f.w * W * wFrac, Math.max(4, Math.hypot((x1 - x0) * f.w * W, (y1 - y0) * f.h * H) / 2), 12));
+          };
+          if (shape === "long") {
+            // Hairline top + under-chin: shadow reads the face shorter.
+            return [
+              stampFrom(roundedPoly((f.x + f.w / 2) * W, (f.y + f.h * 0.06) * H, f.w * W * 0.3, f.h * H * 0.035, 12)),
+              stampFrom(roundedPoly((f.x + f.w / 2) * W, (f.y + f.h * 0.97) * H, f.w * W * 0.26, f.h * H * 0.03, 12)),
+            ];
+          }
+          if (shape === "heart" || shape === "oval" || shape === "diamond") {
+            // Temples (+ cheek tips for diamond); jaw stays light.
+            const stamps = [
+              mkRibbon(0.1, 0.18, 0.28, 0.42, 0.045),
+              mkRibbon(0.82, 0.9, 0.28, 0.42, 0.045),
+            ];
+            if (shape === "diamond") {
+              // On the cheekbone tips, not underneath: minimize width.
+              stamps.push(mkRibbon(0.13, 0.3, 0.48, 0.44, 0.04));
+              stamps.push(mkRibbon(0.7, 0.87, 0.48, 0.44, 0.04));
+            }
+            return mirrorStamps(stamps, lm);
+          }
+          if (shape === "triangle") {
+            // Jaw edges only: light carries up and away.
+            return mirrorStamps([
+              mkRibbon(0.08, 0.24, 0.78, 0.9, 0.05),
+              mkRibbon(0.76, 0.92, 0.78, 0.9, 0.05),
+            ], lm);
+          }
+          // round + square: outer thirds (temple, shelf, jaw) — the
+          // "slim and elongate" / "soften the corners" placements.
+          const cy = (f.y + f.h * 0.62) * H;
+          const mk = (frac: number) => stampFrom(roundedPoly((f.x + f.w * frac) * W, cy, f.w * W * 0.08, f.h * H * 0.1, 12));
+          const base = [mk(0.14), mk(0.86)];
+          if (shape === "round" || shape === "square") {
+            base.push(mkRibbon(0.1, 0.17, 0.3, 0.44, 0.04));
+            base.push(mkRibbon(0.83, 0.9, 0.3, 0.44, 0.04));
+          }
+          return mirrorStamps(base, lm);
         }
         return [stampFrom(roundedPoly((f.x + f.w / 2) * CANVAS_W, (f.y + f.h * 0.46) * CANVAS_H, f.w * CANVAS_W * 0.06, f.h * CANVAS_H * 0.08, 12))];
       }

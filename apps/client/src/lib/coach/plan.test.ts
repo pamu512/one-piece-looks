@@ -18,11 +18,13 @@ const base: CoachPlanInput = {
 
 test("oval default builds the full 4-step plan in MUA order", () => {
   const plan = buildPlan(base);
-  // oval: no contour ribbons -> contour step skipped; blush, brow, highlight
-  assert.equal(plan.length, 3, `steps: ${plan.map((s) => s.verb).join(",")}`);
-  assert.equal(plan[0]!.verb, "warm");
-  assert.equal(plan[1]!.verb, "define");
-  assert.equal(plan[2]!.verb, "brighten");
+  // oval (schema 2): light temple+shelf contour, blush, brow, highlight —
+  // "enhance, don't reshape" still lights the temples per the cited guide.
+  assert.equal(plan.length, 4, `steps: ${plan.map((s) => s.verb).join(",")}`);
+  assert.equal(plan[0]!.verb, "define");
+  assert.equal(plan[1]!.verb, "warm");
+  assert.equal(plan[2]!.verb, "define");
+  assert.equal(plan[3]!.verb, "brighten");
 });
 
 test("every shape in rules.json produces a non-empty plan", () => {
@@ -44,7 +46,10 @@ test("round plan lights temple+jaw ribbons and high angled blush", () => {
     classification: { primary: "round", secondary: "oval", confidence: 0.7, margins: {} },
   });
   const contour = plan[0]!;
-  assert.deepEqual(contour.zoneIds.sort(), ["jaw_L", "jaw_R", "temple_L", "temple_R"].sort());
+  assert.deepEqual(
+    contour.zoneIds.sort(),
+    ["jaw_L", "jaw_R", "temple_L", "temple_R", "cheek_shelf_L", "cheek_shelf_R"].sort(),
+  );
   const blush = plan[1]!;
   assert.deepEqual(blush.zoneIds, ["cheek_apple_L", "cheek_apple_R"]);
 });
@@ -54,8 +59,10 @@ test("shade hexes match the server palettes() formulas exactly", () => {
   const plan = buildPlan({ ...base, skinHex: skin, lockHex: lock, depth });
   const want = deriveShades(skin, lock, depth);
   const byVerb = (v: string) => plan.find((s) => s.verb === v)!;
+  const lastByVerb = (v: string) => [...plan].reverse().find((s) => s.verb === v)!;
   assert.equal(byVerb("warm").shadeHex, want.blush);
-  assert.equal(byVerb("define").shadeHex, want.brow);
+  // two define steps now (contour, then brow): the LAST is the brow shade
+  assert.equal(lastByVerb("define").shadeHex, want.brow);
   assert.equal(byVerb("brighten").shadeHex, want.highlight);
   // server parity, computed inline: contour = mix(skin, #5c3a28, 0.35+d*0.2)
   assert.equal(want.contour, mix(skin, "#5c3a28", 0.35 + depth * 0.2));
@@ -105,5 +112,9 @@ test("depth derives from skin luminance like the server when not handed one", ()
   const planA = buildPlan({ ...base, skinHex: "#7d523a", depth: deep });
   const planB = buildPlan({ ...base, skinHex: "#7d523a", depth: deep });
   assert.equal(planA[0]!.shadeHex, planB[0]!.shadeHex);
-  assert.equal(planA[0]!.shadeHex, deriveShades("#7d523a", base.lockHex, deep).blush);
+  // plan[0] is the contour step (schema 2): its shade is the contour mix
+  assert.equal(planA[0]!.shadeHex, deriveShades("#7d523a", base.lockHex, deep).contour);
+  // the blush shade is unchanged by the new step order
+  const blushA = planA.find((s) => s.verb === "warm")!;
+  assert.equal(blushA.shadeHex, deriveShades("#7d523a", base.lockHex, deep).blush);
 });

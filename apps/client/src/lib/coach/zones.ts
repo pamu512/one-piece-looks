@@ -68,6 +68,7 @@ export type RibbonId =
   | "temple_L" | "temple_R"
   | "jaw_L" | "jaw_R"
   | "cheek_shelf_L" | "cheek_shelf_R"
+  | "cheek_tip_L" | "cheek_tip_R"
   | "under_chin"
   | "hairline_top";
 
@@ -226,6 +227,12 @@ export function buildContourMap(face: NormalizedFace): ContourMap {
   // cheek_shelf: ear top toward the mouth corner, stopping ~60% of the way
   pushRibbon("cheek_shelf_L", [p(234), p(116), lerp(p(50), p(61), 0.6)], 0.08);
   pushRibbon("cheek_shelf_R", [p(454), p(345), lerp(p(280), p(291), 0.6)], 0.08);
+  // cheek_tip: rides ON the cheekbone widest point (116/345) angled down the
+  // face side — the diamond placement ("tips of the cheekbones, not
+  // underneath"). cheek_shelf shades the hollow BELOW the bone (round/square
+  // placement); cheek_tip shades the width AT the bone.
+  pushRibbon("cheek_tip_L", [p(227), p(116), p(205), p(50)], 0.07);
+  pushRibbon("cheek_tip_R", [p(447), p(345), p(425), p(280)], 0.07);
   // under_chin: 148-152-377 arc, inset down (toward the neck)
   pushRibbon("under_chin", [p(148), { x: p(152).x, y: p(152).y + 0.015 * iod }, p(377)], 0.1);
 

@@ -49,10 +49,10 @@ function faceMap(): { face: ReturnType<typeof normalizeFace>; map: ContourMap } 
   return { face, map: buildContourMap(face) };
 }
 
-test("catalog completeness: 8 zones + 8 ribbons, ids unique", () => {
+test("catalog completeness: 8 zones + 10 ribbons, ids unique", () => {
   const { map } = faceMap();
   assert.equal(map.zones.length, 8, `zones: ${map.zones.map((z) => z.id).join(",")}`);
-  assert.equal(map.ribbons.length, 8, `ribbons: ${map.ribbons.map((r) => r.id).join(",")}`);
+  assert.equal(map.ribbons.length, 10, `ribbons: ${map.ribbons.map((r) => r.id).join(",")}`);
   const ids = [...map.zones.map((z) => z.id), ...map.ribbons.map((r) => r.id)];
   assert.equal(new Set(ids).size, ids.length, "ids unique");
 });
@@ -76,6 +76,7 @@ test("L/R mirror pairs agree within 5% IOD (centroid x reflected about the face 
     ["temple_L", "temple_R"],
     ["jaw_L", "jaw_R"],
     ["cheek_shelf_L", "cheek_shelf_R"],
+    ["cheek_tip_L", "cheek_tip_R"],
   ];
   const centroid = (poly: Pt[]): Pt => ({
     x: poly.reduce((a, q) => a + q.x, 0) / poly.length,

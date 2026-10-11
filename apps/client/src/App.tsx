@@ -133,6 +133,7 @@ export default function App() {
           browR: landmarks.browR as [number, number][],
           cheekL: landmarks.cheekL as [number, number][],
           cheekR: landmarks.cheekR as [number, number][],
+          ...(landmarks.faceShape ? { faceShape: landmarks.faceShape } : {}),
         }
       : undefined;
     api.postFace(session.sessionId, photo!.split(",")[1] ?? "", {

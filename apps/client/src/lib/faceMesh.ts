@@ -56,6 +56,10 @@ const FACE_OVAL = [
 
 type VisionModule = typeof import("@mediapipe/tasks-vision");
 
+// Coach cascade (face-shape classification for shape-aware contour).
+import { measureFace } from "./coach/measure.ts";
+import { classifyFace } from "./coach/faceShape.ts";
+
 let visionPromise: Promise<VisionModule | null> | null = null;
 
 /** Resolve tasks-vision lazily; a missing bundle permanently resolves null. */
@@ -366,6 +370,17 @@ export async function detectFaceWithMesh(canvas: HTMLCanvasElement): Promise<imp
     const hasHole = lipInner.length >= 3;
     const mean = meanLipFleshLab(rgba, lip, hasHole ? lipInner : undefined);
 
+    // Coach cascade: classify the face for shape-aware contour placement.
+    // measureFace's yaw gate returns null for non-frontal captures, and the
+    // cascade's own default is oval/low-confidence - never a hard failure.
+    let faceShape: string | undefined;
+    try {
+      const m = measureFace(pts);
+      if (m) faceShape = classifyFace(m).primary;
+    } catch {
+      faceShape = undefined;
+    }
+
     return {
       faceBox,
       lip,
@@ -380,6 +395,7 @@ export async function detectFaceWithMesh(canvas: HTMLCanvasElement): Promise<imp
       browR,
       cheekL,
       cheekR,
+      ...(faceShape ? { faceShape } : {}),
     };
   } catch {
     return null;

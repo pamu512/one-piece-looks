@@ -117,6 +117,8 @@ export interface FaceLandmarksPayload {
   browR?: [number, number][];
   cheekL?: [number, number][];
   cheekR?: [number, number][];
+  /** Coach-cascade face shape; drives shape-aware contour on the server. */
+  faceShape?: string;
 }
 
 /* fetch wrapper with exactly-once retry on retryable errors. */

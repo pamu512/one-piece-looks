@@ -1,57 +1,67 @@
 {
   "$comment1": "MUA knowledge as data - FACE-GEOMETRY.md section 6. One canonical chart system: the classic contour-chart taxonomy (oval/round/square/long/heart/diamond/triangle). Editable without code; every rule carries source provenance.",
   "$comment2": "Copy rule: verbs about light and placement (lengthen, soften, lift, define). Never flaw language (fix, slim, problem, reduce). plan.ts validates verbs against this stance.",
-  "schema": 1,
-  "school": "classic contour-chart taxonomy (single canonical system, cited)",
+  "schema": 2,
+  "school": "classic contour-chart taxonomy; per-shape placements cross-checked against the e.l.f. Cosmetics face-shape contour guide (https://www.elfcosmetics.com/blogs/the-elf-word/how-to-contour-based-on-your-face-shape, read 2026-10-11) and Wikipedia 'Contouring' (technique; Max Factor's 1945 first per-face-shape contour tutorial). Perception goals grounded in Wikipedia 'Facial symmetry' and 'Physical attractiveness' (symmetry and averageness make independent contributions; dimorphism/neoteny markers). Marquardt phi-mask single-template ideal rejected: cross-population fit fails.",
   "verbs": {
     "contour": "define",
     "contour_soft": "soften",
     "lift": "lift",
     "lengthen": "lengthen",
+    "shorten": "lengthen",
     "brighten": "brighten",
+    "balance": "balance",
     "warm": "warm"
   },
   "shapes": {
     "long": {
-      "contour": { "ribbons": ["hairline_top", "under_chin"], "note": "shorten the vertical read with light at the top and below the chin", "source": "chart-ref long-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 5, "height": "mid", "source": "chart-ref long-2" },
-      "brow": { "arch": "flat", "source": "chart-ref long-3" },
-      "highlight": { "zones": ["cheek_apple"], "source": "chart-ref long-4" }
+      "goal": "shorten the vertical read",
+      "contour": { "ribbons": ["hairline_top", "under_chin"], "note": "shadow at the hairline and below the chin reads the face shorter; cheek contour stays horizontal", "source": "e.l.f. oblong/rectangular: contour 'along the top of your forehead and just under your chin - this helps shorten the length'; cheekbone contour 'more horizontal (not angled!) to avoid elongating'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 5, "height": "mid", "source": "chart-ref long-2 (calibration ours)" },
+      "brow": { "arch": "flat", "source": "chart-ref long-3 (calibration ours)" },
+      "highlight": { "zones": ["cheek_apple"], "skip": ["chin_ball"], "note": "skip the chin highlight so light does not draw the face downward", "source": "e.l.f. oblong: 'skip the chin highlight to avoid drawing the face downward'" }
     },
     "round": {
-      "contour": { "ribbons": ["temple_L", "temple_R", "jaw_L", "jaw_R"], "note": "light along the outer thirds for a lengthened read", "source": "chart-ref round-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 25, "height": "high", "source": "chart-ref round-2" },
-      "brow": { "arch": "defined", "source": "chart-ref round-3" },
-      "highlight": { "zones": ["chin_ball", "under_eye"], "source": "chart-ref round-4" }
+      "goal": "lengthen the vertical read",
+      "contour": { "ribbons": ["temple_L", "temple_R", "jaw_L", "jaw_R", "cheek_shelf_L", "cheek_shelf_R"], "note": "shadow the outer thirds, blend the shelf upward; light lifts to the center", "source": "e.l.f. round: contour 'along the sides of your forehead, under your cheekbones (be sure to blend upwards!), and along your jawline to subtly slim and elongate'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 25, "height": "high", "source": "chart-ref round-2 (calibration ours)" },
+      "brow": { "arch": "defined", "source": "chart-ref round-3 (calibration ours)" },
+      "highlight": { "zones": ["chin_ball", "under_eye", "forehead_center", "nose_bridge"], "note": "center light draws the eye inward for lift", "source": "e.l.f. round: 'Bring light the center of your forehead and chin with concealer, then highlight the bridge of your nose and tops of your cheekbones, to draw the eye to the center of your face for instant lift!'" }
     },
     "square": {
-      "contour": { "ribbons": ["jaw_L", "jaw_R", "temple_L", "temple_R"], "note": "round the corners with soft light at the angles", "source": "chart-ref square-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "placement": "round", "source": "chart-ref square-2" },
-      "brow": { "arch": "soft", "source": "chart-ref square-3" }
+      "goal": "soften the angles",
+      "contour": { "ribbons": ["jaw_L", "jaw_R", "temple_L", "temple_R", "cheek_shelf_L", "cheek_shelf_R"], "note": "shadow the corners: forehead sides and jaw angles; the shelf blends upward for lift", "source": "e.l.f. square: contour 'along the sides of your forehead and the corners of your jawline to dial down the width. Sweep some contour just under your cheekbones, blending upwards for a lifted effect'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "placement": "round", "source": "chart-ref square-2 (calibration ours)" },
+      "brow": { "arch": "soft", "source": "chart-ref square-3 (calibration ours)" },
+      "highlight": { "zones": ["nose_bridge", "cheek_apple"], "source": "e.l.f. square: 'focus on bridge of your nose and tops of your cheekbones to brighten and balance'" }
     },
     "heart": {
-      "contour": { "ribbons": ["temple_L", "temple_R"], "note": "balance the upper width with light at the temples", "source": "chart-ref heart-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 10, "height": "low", "source": "chart-ref heart-2" },
-      "brow": { "arch": "rounded", "source": "chart-ref heart-3" },
-      "highlight": { "zones": ["chin_ball"], "source": "chart-ref heart-4" }
+      "goal": "balance the upper width",
+      "contour": { "ribbons": ["temple_L", "temple_R", "cheek_shelf_L", "cheek_shelf_R"], "note": "shadow the wide top and under the cheekbone; keep the chin unshadowed", "source": "e.l.f. heart: contour 'along the sides of your forehead and temples to soften the width. Add a little under your cheekbones... Lightly dust some contour along the jawline, but skip the chin'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 10, "height": "low", "source": "chart-ref heart-2 (calibration ours)" },
+      "brow": { "arch": "rounded", "source": "chart-ref heart-3 (calibration ours)" },
+      "highlight": { "zones": ["cheek_apple", "chin_ball", "under_eye"], "note": "brightening the chin balances the narrower lower face", "source": "e.l.f. heart: 'place concealer in center of your forehead, and chin to brighten and balance'" }
     },
     "diamond": {
-      "contour": { "ribbons": ["cheek_shelf_L", "cheek_shelf_R"], "note": "soften the widest point along the cheekbone line", "source": "chart-ref diamond-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 20, "height": "high", "source": "chart-ref diamond-2" },
-      "brow": { "arch": "soft", "source": "chart-ref diamond-3" },
-      "highlight": { "zones": ["forehead_center", "chin_ball"], "source": "chart-ref diamond-4" }
+      "goal": "soften the widest point",
+      "contour": { "ribbons": ["cheek_tip_L", "cheek_tip_R", "temple_L", "temple_R", "jaw_L", "jaw_R"], "note": "shadow ON the cheekbone tips, not underneath - reads the width softer instead of deepening the hollow", "source": "e.l.f. diamond: contour 'along the tips of your cheekbones (not underneath - we're minimizing, not enhancing here!), sides of your forehead, and jawline to soften those sharper points'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 20, "height": "high", "source": "chart-ref diamond-2 (calibration ours)" },
+      "brow": { "arch": "soft", "source": "chart-ref diamond-3 (calibration ours)" },
+      "highlight": { "zones": ["forehead_center", "chin_ball", "nose_bridge"], "note": "center light draws the eye inward past the width", "source": "e.l.f. diamond: 'use concealer in center of your forehead and chin, then add highlight to bridge of your nose, to brighten and draw the eye inward'" }
     },
     "triangle": {
-      "contour": { "ribbons": ["jaw_L", "jaw_R"], "note": "carry light up and away along the jaw line", "source": "chart-ref triangle-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "source": "chart-ref triangle-2" },
-      "brow": { "arch": "defined", "source": "chart-ref triangle-3" },
-      "highlight": { "zones": ["forehead_center"], "source": "chart-ref triangle-4" }
+      "goal": "lift the read upward",
+      "contour": { "ribbons": ["jaw_L", "jaw_R"], "note": "shade the jaw edges so light carries up and away", "source": "chart-ref triangle-1; consistent with e.l.f. combination guidance: stronger jawline, 'lightly shade the edges to balance it out'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "source": "chart-ref triangle-2 (calibration ours)" },
+      "brow": { "arch": "defined", "source": "chart-ref triangle-3 (calibration ours)" },
+      "highlight": { "zones": ["forehead_center", "under_eye"], "source": "chart-ref triangle-4; consistent with e.l.f. combination guidance: wider forehead, 'contour the sides to soften it'" }
     },
     "oval": {
-      "contour": { "ribbons": [], "note": "balanced canvas: placement follows the feature, not a correction", "source": "chart-ref oval-1" },
-      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "source": "chart-ref oval-2" },
-      "brow": { "arch": "natural", "source": "chart-ref oval-3" },
-      "highlight": { "zones": ["cheek_apple", "cupid_bow"], "source": "chart-ref oval-4" }
+      "goal": "enhance natural balance",
+      "contour": { "ribbons": ["temple_L", "temple_R", "cheek_shelf_L", "cheek_shelf_R"], "skip": ["jaw_L", "jaw_R"], "note": "light touch at temples and shelf only; heavy jaw contour is unnecessary", "source": "e.l.f. oval: 'the contouring goal isn't to reshape, but to enhance your natural proportions... contouring lightly along your temples and under your cheekbones... skip heavy jawline contour - a light sweep along the sides of your jaw is all you need'" },
+      "blush": { "zone": "cheek_apple", "angle_deg": 15, "height": "mid", "source": "chart-ref oval-2 (calibration ours)" },
+      "brow": { "arch": "natural", "source": "chart-ref oval-3 (calibration ours)" },
+      "highlight": { "zones": ["cheek_apple", "nose_bridge", "cupid_bow"], "source": "e.l.f. oval: 'pop it on your cheekbones and the bridge of your nose, for that subtle, sculpted glow' (cupid_bow ours)" }
     }
   },
   "brushDirections": {
@@ -63,6 +73,8 @@
     "jaw_R": "jaw corner upward toward the ear",
     "cheek_shelf_L": "ear toward the mouth corner, stop short",
     "cheek_shelf_R": "ear toward the mouth corner, stop short",
+    "cheek_tip_L": "cheekbone tip downward along the face side, one pass",
+    "cheek_tip_R": "cheekbone tip downward along the face side, one pass",
     "cheek_apple": "apples outward toward the temple at the blush angle",
     "under_eye": "inner corner outward, press don't drag",
     "chin_ball": "center of the chin, small circles",

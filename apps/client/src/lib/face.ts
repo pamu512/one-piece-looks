@@ -61,6 +61,12 @@ export interface FaceLandmarks {
   browR: Poly;
   cheekL: Poly;
   cheekR: Poly;
+  /**
+   * Coach-cascade classification of the mesh (coach/faceShape). Absent when
+   * the yaw gate rejects the capture; the server falls back to neutral
+   * symmetric contour placement.
+   */
+  faceShape?: string | undefined;
 }
 
 /* ---------- geometry ---------- */
