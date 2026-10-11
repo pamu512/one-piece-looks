@@ -13,6 +13,7 @@ import { warmDecode } from "./lib/warmDecode";
 import { buildPlan } from "./lib/coach/plan.ts";
 import { depthOf } from "./lib/coach/shades.ts";
 import { CoachOverlay } from "./components/coachOverlay";
+import { startLiveContour, type LiveContourState } from "./lib/liveContour.ts";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
@@ -31,7 +32,7 @@ import {
  *         shuffle, save, share. Vibe lives in a bottom sheet AFTER looks.
  * ================================================================= */
 
-type Stage = "camera" | "photo" | "looks";
+type Stage = "camera" | "photo" | "looks" | "coach";
 
 const ZONE_TARGETS: { id: Category; label: string; x: number; y: number }[] = [
   { id: "lip", label: "Lip", x: 44.5, y: 70 },
@@ -89,7 +90,7 @@ function panShiftSentence(onFace: string, pan: string | null): string {
 }
 
 export default function App() {
-  const [stage, setStage] = useState<Stage>("camera");
+  const [stage, setStage] = useState<Stage>("coach");
   const [photo, setPhoto] = useState<string | null>(null);
 
   const [session, setSession] = useState<SessionInfo | null>(null);
@@ -209,6 +210,8 @@ export default function App() {
           <CalmError msg={error.msg} onRetry={error.retry} onBack={() => setError(null)} />
         </div>
       )}
+
+      {stage === "coach" && <LiveCoachStage onExit={() => setStage("camera")} />}
 
       {stage === "camera" && (
         <CameraStage
@@ -911,6 +914,92 @@ function LooksStage({
             </div>
           </div>
         </>
+      )}
+    </section>
+  );
+}
+
+/* ================= live coach: the where-it-goes mirror ================= */
+
+const SHAPE_WORD: Record<string, string> = {
+  oval: "balanced oval", round: "round", square: "square", heart: "heart",
+  diamond: "diamond", triangle: "triangle", pear: "pear", oblong: "oblong",
+  rectangle: "rectangle", invTriangle: "inverted triangle", long: "long",
+};
+
+function LiveCoachStage({ onExit }: { onExit: () => void }) {
+  const cam = useCamera();
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [state, setState] = useState<LiveContourState | null>(null);
+  const handleRef = useRef<import("./lib/liveContour.ts").LiveContourHandle | null>(null);
+
+  useEffect(() => {
+    void cam.start();
+    return () => cam.stop();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const v = cam.videoRef.current;
+    const c = canvasRef.current;
+    if (!v || !c) return;
+    let stop: (() => void) | null = null;
+    let cancelled = false;
+    // Wait for the video element to exist with a stream, then start the loop.
+    const t = setInterval(() => {
+      if (stopped) return;
+      if (v.readyState >= 2) {
+        clearInterval(t);
+        handleRef.current = startLiveContour(v, c, "models/face_landmarker.task", (s) => { if (!cancelled) setState(s); });
+        stop = () => handleRef.current?.stop();
+      }
+    }, 250);
+    let stopped = false;
+    return () => { stopped = true; cancelled = true; clearInterval(t); stop?.(); };
+  }, [cam.state]);
+
+  const shapeWord = state ? (SHAPE_WORD[state.shape] ?? state.shape) : "…";
+
+  return (
+    <section className="stage stage-coach fade-in" aria-label="Live contour coach">
+      <div className="camera-media coach-live">
+        <video ref={cam.videoRef} playsInline muted aria-label="Front camera preview" />
+        <canvas ref={canvasRef} className="coach-canvas" aria-hidden />
+        {cam.state === "starting" && <p className="cam-note">Starting the camera…</p>}
+        {cam.state === "denied" && (
+          <div className="denied">
+            <p className="denied-title display">The mirror needs your camera.</p>
+            <p className="cam-note">Allow camera access to see where the light goes.</p>
+            <button className="btn btn-primary" onClick={() => void cam.start()}>Try again</button>
+            <button className="btn btn-ghost" onClick={onExit}>Back</button>
+          </div>
+        )}
+      </div>
+      {cam.state === "live" && (
+        <div className="coach-live-bar">
+          <p className="coach-live-shape">
+            {state ? <>Your read: <b>{shapeWord}</b></> : "Reading your face…"}
+          </p>
+          <p className="coach-live-hint">
+            {state?.layer === "highlight" ? "Light lands on the high points" : "Shade follows the lines of your shape"}
+          </p>
+          <div className="coach-live-actions">
+            <button
+              className={`mini-chip${state?.layer === "contour" ? " on" : ""}`}
+              aria-pressed={state?.layer === "contour"}
+              onClick={() => { handleRef.current?.setLayer("contour"); setState((s) => (s ? { ...s, layer: "contour" } : s)); }}
+            >
+              Shade
+            </button>
+            <button
+              className={`mini-chip${state?.layer === "highlight" ? " on" : ""}`}
+              aria-pressed={state?.layer === "highlight"}
+              onClick={() => { handleRef.current?.setLayer("highlight"); setState((s) => (s ? { ...s, layer: "highlight" } : s)); }}
+            >
+              Light
+            </button>
+            <button className="mini-chip" onClick={onExit}>Looks demo</button>
+          </div>
+        </div>
       )}
     </section>
   );

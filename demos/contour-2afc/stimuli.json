@@ -1,0 +1,200 @@
+{
+  "t": "2026-10-11T02:45:04.698Z",
+  "mood": "Soft",
+  "event": "Casual",
+  "trialsPerPair": 3,
+  "roles": [
+    "Statement",
+    "Lift"
+  ],
+  "faces": [
+    "face-a-curly",
+    "face-b-pulled-back",
+    "face-c-blonde",
+    "face-d-tan"
+  ],
+  "faceShapes": {
+    "face-a-curly": {
+      "shape": "diamond"
+    },
+    "face-b-pulled-back": {
+      "shape": "diamond"
+    },
+    "face-c-blonde": {
+      "shape": "pear"
+    },
+    "face-d-tan": {
+      "shape": "diamond"
+    }
+  },
+  "key": [
+    {
+      "id": 0,
+      "face": "face-a-curly",
+      "role": "Statement",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 1,
+      "face": "face-a-curly",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 2,
+      "face": "face-a-curly",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 3,
+      "face": "face-a-curly",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 4,
+      "face": "face-a-curly",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 5,
+      "face": "face-a-curly",
+      "role": "Lift",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 6,
+      "face": "face-b-pulled-back",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 7,
+      "face": "face-b-pulled-back",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 8,
+      "face": "face-b-pulled-back",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 9,
+      "face": "face-b-pulled-back",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 10,
+      "face": "face-b-pulled-back",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 11,
+      "face": "face-b-pulled-back",
+      "role": "Lift",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 12,
+      "face": "face-c-blonde",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 13,
+      "face": "face-c-blonde",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 14,
+      "face": "face-c-blonde",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 15,
+      "face": "face-c-blonde",
+      "role": "Lift",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 16,
+      "face": "face-c-blonde",
+      "role": "Lift",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 17,
+      "face": "face-c-blonde",
+      "role": "Lift",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 18,
+      "face": "face-d-tan",
+      "role": "Statement",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 19,
+      "face": "face-d-tan",
+      "role": "Statement",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 20,
+      "face": "face-d-tan",
+      "role": "Statement",
+      "leftIsShaped": false,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 21,
+      "face": "face-d-tan",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 22,
+      "face": "face-d-tan",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    },
+    {
+      "id": 23,
+      "face": "face-d-tan",
+      "role": "Lift",
+      "leftIsShaped": true,
+      "moreSculpted": "shaped"
+    }
+  ]
+}

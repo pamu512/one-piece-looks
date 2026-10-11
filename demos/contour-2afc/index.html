@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>2AFC — which reads more sculpted?</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0c0d10; color:#f4f2ee; font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px calc(24px + env(safe-area-inset-bottom)); }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.sub { color:#b9b4ab; margin: 0 0 20px; font-size: 14px; }
+  .pair { display:grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+  .pair button { border: 2px solid rgba(255,255,255,.14); background:#14151a; border-radius: 14px;
+    padding: 0; cursor: pointer; overflow: hidden; transition: border-color .12s, transform .12s; }
+  .pair button:hover { border-color: rgba(255,255,255,.45); transform: translateY(-2px); }
+  .pair img { display:block; width:100%; aspect-ratio: 4/5; object-fit: cover; }
+  .tag { text-align:center; color:#7d7a72; font-size:12px; margin: 0 0 18px; }
+  .tag b { color:#f4f2ee; }
+  .bar { position: sticky; top: 0; background: linear-gradient(180deg,#0c0d10 70%, transparent);
+    padding: 10px 0 14px; display:flex; justify-content:space-between; align-items:center; z-index: 2; }
+  .bar .count { font-size: 14px; color:#b9b4ab; }
+  .done { display:none; margin-top: 24px; padding: 18px; border:1px solid rgba(255,255,255,.16);
+    border-radius: 14px; background:#14151a; }
+  textarea { width:100%; height: 140px; background:#0c0d10; color:#f4f2ee; border:1px solid rgba(255,255,255,.2);
+    border-radius: 10px; padding: 10px; font: 12px ui-monospace,monospace; box-sizing:border-box; }
+  .hint { color:#7d7a72; font-size: 13px; }
+  .trial { margin-bottom: 28px; }
+  button.sel { border-color: #e0587a !important; }
+</style></head>
+<body><main>
+  <h1>Which face reads more sculpted?</h1>
+  <p class="sub">Pick the face whose shading and light read more defined and sculpted. Same face, two placements. One tap per trial.</p>
+  <div class="bar"><span class="count" id="count"></span><span class="hint">answers save on this device</span></div>
+  <div id="trials"></div>
+  <div class="done" id="done">
+    <h2>All answered</h2>
+    <p class="hint">Copy this JSON back to the agent (it holds no answers key):</p>
+    <textarea id="result" readonly></textarea>
+  </div>
+</main>
+<script type="module">
+const stimuli = await fetch("trials.json").then(r => r.json());
+const trials = stimuli.trials || [];
+const storeKey = "contour-2afc-answers";
+const answers = JSON.parse(localStorage.getItem(storeKey) || "{}");
+const wrap = document.getElementById("trials");
+const countEl = document.getElementById("count");
+function renderCount() {
+  const n = Object.keys(answers).length;
+  countEl.textContent = n + " / " + trials.length + " answered";
+  if (n >= trials.length) {
+    const done = document.getElementById("done");
+    done.style.display = "block";
+    document.getElementById("result").value = JSON.stringify({ t: new Date().toISOString(), answers });
+  }
+}
+for (const t of trials) {
+  const div = document.createElement("div");
+  div.className = "trial";
+  div.innerHTML = '<div class="pair">' +
+    '<button data-side="L"><img loading="lazy" src="' + t.left + '"></button>' +
+    '<button data-side="R"><img loading="lazy" src="' + t.right + '"></button>' +
+    '</div><p class="tag">Trial <b>' + (t.id + 1) + '</b></p>';
+  div.querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", () => {
+      answers[t.id] = b.dataset.side;
+      localStorage.setItem(storeKey, JSON.stringify(answers));
+      div.querySelectorAll("button").forEach((x) => x.classList.remove("sel"));
+      b.classList.add("sel");
+      renderCount();
+    });
+  });
+  if (answers[t.id]) div.querySelector('[data-side="' + answers[t.id] + '"]').classList.add("sel");
+  wrap.appendChild(div);
+}
+renderCount();
+</script></body></html>
