@@ -906,6 +906,53 @@ body {
   padding: 11px 18px;
   font-size: 15px;
 }
+
+/* coach overlay: the "where it goes" face map */
+.coach-pill { margin-left: auto; }
+.coach-sheet { max-height: 94dvh; overflow-y: auto; }
+.coach-map {
+  border-radius: var(--radius-m);
+  border: 1px solid var(--line);
+  overflow: hidden;
+  aspect-ratio: 4 / 5;
+}
+.coach-map svg { display: block; width: 100%; height: 100%; }
+.coach-overlay-empty {
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  color: var(--ink-3);
+  font-size: 14px;
+  text-align: center;
+  padding: 0 16px;
+}
+.coach-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+.coach-steps .chip-vibe {
+  min-height: var(--tap);
+  padding: 10px 14px;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.coach-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  flex: none;
+}
+.coach-note {
+  margin: 10px 2px 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
 .dirty-note {
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError, EVENTS, MOODS, api, hexToRgb, newIdemKey, setLockAccent,
   type Category, type Event, type FaceLandmarksPayload, type FaceResult, type Look, type LooksResult,
@@ -10,6 +10,9 @@ import {
 import { loadFaceFrameSession } from "./lib/faceModel";
 import { composeShareCard, downloadBlob, shareLooksPng } from "./lib/share";
 import { warmDecode } from "./lib/warmDecode";
+import { buildPlan } from "./lib/coach/plan.ts";
+import { depthOf } from "./lib/coach/shades.ts";
+import { CoachOverlay } from "./components/coachOverlay";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
@@ -241,6 +244,9 @@ export default function App() {
           lock={lock}
           mood={mood} event={event} onMood={setMood} onEvent={setEvent}
           pairDirty={pairDirty}
+          faceShape={landmarks?.faceShape ?? null}
+          skinHex={face?.tone.source === "api" ? face.tone.skinColor : (face?.toneHex ?? "#c28e6b")}
+          lockHex={lock.onFaceHex}
           onRebuild={() => void buildLooks(mood, event)}
           onShuffle={() => void shuffle()}
           onRestart={restart}
@@ -543,6 +549,7 @@ const ROLE_TAGLINE: Record<Look["role"], string> = {
 
 function LooksStage({
   photo, looks, lock, mood, event, onMood, onEvent, pairDirty, onRebuild, onShuffle, onRestart, busy,
+  faceShape, skinHex, lockHex,
 }: {
   photo: string | null;
   looks: LooksResult | null;
@@ -552,9 +559,33 @@ function LooksStage({
   pairDirty: boolean;
   onRebuild: () => void; onShuffle: () => void; onRestart: () => void;
   busy: boolean;
+  /** Coach classification of the capture; null when the yaw gate refused. */
+  faceShape: string | null;
+  skinHex: string;
+  lockHex: string;
 }) {
   const [showHex, setShowHex] = useState(false);
   const [vibeOpen, setVibeOpen] = useState(false);
+  const [coachOpen, setCoachOpen] = useState(false);
+  const [coachStep, setCoachStep] = useState<number | null>(null);
+  const coachPlan = useMemo(() => {
+    if (!faceShape) return null;
+    try {
+      return buildPlan({
+        classification: {
+          primary: faceShape as never,
+          secondary: "oval",
+          confidence: 0.7,
+          margins: {},
+        },
+        skinHex,
+        lockHex,
+        depth: depthOf(skinHex),
+      });
+    } catch {
+      return null;
+    }
+  }, [faceShape, skinHex, lockHex]);
   const [page, setPage] = useState(0);
   const [bare, setBare] = useState(false);
   const [shareState, setShareState] = useState<"idle" | "working" | "shared" | "downloaded" | "failed">("idle");
@@ -775,6 +806,17 @@ function LooksStage({
           {pairDirty && <span className="vibe-dot" aria-hidden />}
           <IconChevron size={14} dir="down" />
         </button>
+        {coachPlan && (
+          <button
+            className="vibe-pill coach-pill"
+            onClick={() => { setCoachOpen(true); setCoachStep(null); }}
+            aria-label="See where each step goes on your face"
+          >
+            <IconVibe />
+            Face map
+            <IconChevron size={14} dir="down" />
+          </button>
+        )}
       </div>
 
       {shareState === "shared" && <div className="toast" role="status">Shared</div>}
@@ -793,6 +835,43 @@ function LooksStage({
               <button className="btn btn-ghost" onClick={closeSharePreview}>Back</button>
               <button className="btn btn-ghost" onClick={saveFromPreview}>Save</button>
               <button className="btn btn-primary" onClick={() => void shareFromPreview()}>Share</button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {coachOpen && coachPlan && photo && (
+        <>
+          <div className="sheet-scrim" onClick={() => setCoachOpen(false)} aria-hidden />
+          <div className="sheet coach-sheet" role="dialog" aria-label="Face map">
+            <div className="sheet-handle" aria-hidden />
+            <p className="sheet-title">Where it goes</p>
+            <div className="coach-map">
+              <CoachOverlay photo={photo} steps={coachPlan} activeStep={coachStep} />
+            </div>
+            <div className="coach-steps" role="tablist" aria-label="Steps">
+              <button
+                className={`chip-vibe${coachStep === null ? " on" : ""}`}
+                onClick={() => setCoachStep(null)}
+              >
+                All
+              </button>
+              {coachPlan.map((s, i) => (
+                <button
+                  key={i}
+                  className={`chip-vibe${coachStep === i ? " on" : ""}`}
+                  onClick={() => setCoachStep(i)}
+                >
+                  <span className="coach-swatch" style={{ background: s.shadeHex }} aria-hidden />
+                  {s.verb}
+                </button>
+              ))}
+            </div>
+            {coachStep !== null && coachPlan[coachStep] && (
+              <p className="coach-note">{coachPlan[coachStep].oneSentence}</p>
+            )}
+            <div className="sheet-actions share-actions">
+              <button className="btn btn-ghost" onClick={() => setCoachOpen(false)}>Back</button>
             </div>
           </div>
         </>

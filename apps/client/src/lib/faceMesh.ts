@@ -60,6 +60,18 @@ type VisionModule = typeof import("@mediapipe/tasks-vision");
 import { measureFace } from "./coach/measure.ts";
 import { classifyFace } from "./coach/faceShape.ts";
 
+/**
+ * The raw 478 landmark fractions of the LAST successful mesh detection
+ * (frame-fraction space). The coach overlay re-runs buildContourMap on
+ * these; nothing else reads this. Cleared on failure.
+ */
+let lastRawPoints: ReadonlyArray<{ x: number; y: number }> | null = null;
+
+/** Raw mesh points from the last detectFaceWithMesh success, if any. */
+export function lastMeshPoints(): ReadonlyArray<{ x: number; y: number }> | null {
+  return lastRawPoints;
+}
+
 let visionPromise: Promise<VisionModule | null> | null = null;
 
 /** Resolve tasks-vision lazily; a missing bundle permanently resolves null. */
@@ -336,6 +348,7 @@ export async function detectFaceWithMesh(canvas: HTMLCanvasElement): Promise<imp
     const face = result.faceLandmarks?.[0];
     if (!face || face.length < 468) return null;
     const pts: MeshPoint[] = face.map((p) => ({ x: p.x, y: p.y, z: p.z ?? 0 }));
+    lastRawPoints = face.map((p) => ({ x: p.x, y: p.y }));
 
     // The 20-point ring connects sparse landmarks with straight chords; on a
     // curved lip that cuts the flesh at the cupid's bow and corners (measured:
