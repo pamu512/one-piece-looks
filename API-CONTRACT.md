@@ -1,10 +1,21 @@
 # One Piece Looks - Client/Server Contract
 
+> Contract version: v2 2026-10-10 (v1: initial three-look contract).
+> v2 change: Honesty clause added - renders are never retouched (see below).
+
 Server (this repo, apps/server) is the ONLY YouCam caller. The client (apps/client, built by Autoclaw) owns capture, sampling, gates, and all six screens.
 
 - Base URL dev: http://127.0.0.1:8787
 - All bodies JSON. Errors: `{ "error": string, "code": string, "retryable": boolean }`.
 - `mock: true` in responses means the server has no YouCam key; shapes are identical either way.
+
+## Honesty clause (v2, 2026-10-10)
+
+This contract is honest by construction, and the builder is contract-tested to keep it that way:
+
+- Rendered looks never contain `skin_smooth` or any face-reshaping effect (no slimming, resizing, or warping of eyes, jaw, lips, or face). The only allowed effect categories are color/pattern paint: `lip_color`, `blush`, `eyebrows`, `eye_shadow`, `eye_liner`, `eyelashes`, `contour`, `highlighter`.
+- The lock hex rendered is the user's on-face color, sampled from their photo - not a product pan hex and not a nearest-shade substitution (makeup-vto takes arbitrary hex; `lockApproximated` stays false).
+- Retouch-by-default is out of scope forever. Likeness ("looks like her real face"), not flattery, is the metric we compete on. Coached placement (Phase 1+) is advisory overlay geometry and copy; it never moves pixels of the user's face.
 
 ## Flow
 

@@ -386,14 +386,6 @@ function highlightEffect(pattern: string, hex: string, intensity: number, oily: 
   };
 }
 
-function skinSmooth(strength: number): VtoEffect {
-  return {
-    category: "skin_smooth",
-    skinSmoothStrength: Math.round(strength),
-    skinSmoothColorIntensity: Math.round(strength * 0.8),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // The builder
 // ---------------------------------------------------------------------------
@@ -456,10 +448,8 @@ export function buildLook(input: BuildInput, role: LookRole): BuiltLook {
   const i = vibe.intensity;
 
   if (role === "anchor") {
-    // Locked piece, near-bare rest. Nothing else but light smoothing.
-    effects.unshift(skinSmooth(18));
+    // Locked piece, near-bare rest. Honest stance: no smoothing, ever.
   } else if (role === "lift") {
-    effects.unshift(skinSmooth(35));
     // The nameable step (verdict P0-1, 2026-10-07): lash + brow definition
     // and a blush raised onto the cheekbone. A viewer can verbalize "eyes
     // opened up, cheeks lifted" - not just an opacity nudge. The locked
@@ -491,7 +481,7 @@ export function buildLook(input: BuildInput, role: LookRole): BuiltLook {
     }
   } else {
     // Statement: locked piece plus the full pattern set.
-    effects.unshift(skinSmooth(45));
+    // Honest stance: no smoothing unshift here - renders are unretouched.
     const contourPattern = CONTOUR_PATTERNS.includes(CONTOUR_DEFAULT)
       ? CONTOUR_DEFAULT
       : (CONTOUR_PATTERNS[0] as string);
