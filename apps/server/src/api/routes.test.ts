@@ -382,3 +382,120 @@ describe("tone fallback picker", () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe("money safety (review 2026-10-10)", () => {
+  let app: ReturnType<typeof makeApp>;
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  it("same idemKey replays the stored result without spending budget again", async () => {
+    const sessionId = await readySession(app);
+    const first = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Soft", event: "Casual", idemKey: "retry-demo-0001" },
+    });
+    expect(first.statusCode).toBe(200);
+    const firstJson = first.json<{ looks: { imageUrl: string }[]; rendersLeft: number }>();
+    expect(firstJson.rendersLeft).toBe(6);
+
+    // The lost-response retry: same intent, same key.
+    const retry = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Soft", event: "Casual", idemKey: "retry-demo-0001" },
+    });
+    expect(retry.statusCode).toBe(200);
+    const retryJson = retry.json<{ looks: { imageUrl: string }[]; rendersLeft: number }>();
+    expect(retryJson.rendersLeft).toBe(6); // NOT 3 — no re-spend
+    expect(retryJson.looks.map((l) => l.imageUrl)).toEqual(firstJson.looks.map((l) => l.imageUrl));
+  });
+
+  it("a DIFFERENT idemKey is a new intent and spends normally", async () => {
+    const sessionId = await readySession(app);
+    await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Soft", event: "Casual", idemKey: "intent-one-00001" },
+    });
+    const second = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Soft", event: "Casual", idemKey: "intent-two-00002" },
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json<{ rendersLeft: number }>().rendersLeft).toBe(3);
+  });
+
+  it("concurrent builds cannot both pass the budget check (reserve-then-render)", async () => {
+    const tightApp = Fastify({ bodyLimit: 20 * 1024 * 1024 });
+    registerRoutes(tightApp, { ...cfg, rendersBudget: 6 });
+    const sessionId = await readySession(tightApp);
+    // Budget 6 fits exactly two builds of 3; a third would need 9. Under the
+    // old check-then-await all three could pass against stale rendersUsed
+    // and render 9 on a 6 budget. Reserve-then-render must cap at two.
+    const results = await Promise.all(
+      [1, 2, 3].map((n) =>
+        tightApp.inject({
+          method: "POST",
+          url: `/api/session/${sessionId}/looks`,
+          payload: { mood: "Soft", event: "Casual", idemKey: `race-key-${n}-00000` },
+        }),
+      ),
+    );
+    const oks = results.filter((r) => r.statusCode === 200);
+    const exhausted = results.filter((r) => r.statusCode === 429);
+    expect(oks.length).toBe(2);
+    expect(exhausted.length).toBe(1);
+    const left = oks.map((r) => r.json<{ rendersLeft: number }>().rendersLeft).sort();
+    expect(left).toEqual([0, 3]);
+  });
+
+  it("shuffle retry with the same idemKey replays without spending", async () => {
+    const sessionId = await readySession(app);
+    await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Soft", event: "Casual", idemKey: "build-key-000001" },
+    });
+    const sh1 = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/shuffle`,
+      payload: { idemKey: "shuffle-key-000001" },
+    });
+    expect(sh1.statusCode).toBe(200);
+    expect(sh1.json<{ rendersLeft: number }>().rendersLeft).toBe(3);
+    const sh2 = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/shuffle`,
+      payload: { idemKey: "shuffle-key-000001" },
+    });
+    expect(sh2.statusCode).toBe(200);
+    expect(sh2.json<{ rendersLeft: number }>().rendersLeft).toBe(3); // no re-spend
+  });
+
+  it("demo token rejects requests without it and accepts the right one", async () => {
+    const tokened = Fastify({ bodyLimit: 20 * 1024 * 1024 });
+    registerRoutes(tokened, { ...cfg, demoToken: "sesame-day-token" });
+    const bare = await tokened.inject({ method: "POST", url: "/api/session" });
+    expect(bare.statusCode).toBe(401);
+    expect(bare.json<{ code: string }>().code).toBe("demo_token_required");
+
+    // Wrong token also rejected.
+    const wrong = await tokened.inject({
+      method: "POST",
+      url: "/api/session",
+      headers: { "x-demo-token": "nope" },
+    });
+    expect(wrong.statusCode).toBe(401);
+
+    // Right token passes; health stays open.
+    const ok = await tokened.inject({
+      method: "POST",
+      url: "/api/session",
+      headers: { "x-demo-token": "sesame-day-token" },
+    });
+    expect(ok.statusCode).toBe(200);
+  });
+});

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ApiError, EVENTS, MOODS, api, hexToRgb, setLockAccent,
+  ApiError, EVENTS, MOODS, api, hexToRgb, newIdemKey, setLockAccent,
   type Category, type Event, type FaceLandmarksPayload, type FaceResult, type Look, type LooksResult,
   type Mood, type SessionInfo, type Tone,
 } from "./lib/types";
@@ -162,7 +162,7 @@ export default function App() {
     api.createSession().then(setSession).catch(() => undefined);
   };
 
-  async function buildLooks(m: Mood, e: Event, toneChoice?: { depth: string; temperature: "warm" | "neutral" | "cool" }) {
+  async function buildLooks(m: Mood, e: Event, toneChoice?: { depth: string; temperature: "warm" | "neutral" | "cool" }, idemKey = newIdemKey()) {
     if (!session || busy) return;
     setBusy(true); setError(null);
     try {
@@ -171,25 +171,28 @@ export default function App() {
         setTone(res.tone);
       }
       setStage("looks"); setPhase("building");
-      const res = await api.postLooks(session.sessionId, m, e);
+      // idemKey is stable across retries of THIS intent (including the
+      // callRetry auto-repost and the calm-card manual retry), so a lost
+      // response replays the stored renders instead of re-spending budget.
+      const res = await api.postLooks(session.sessionId, m, e, idemKey);
       await warmDecode(res.looks.map((l) => l.imageUrl));
       setLooks(res); setBuiltPair({ mood: m, event: e });
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "The looks didn't build.";
-      setError({ msg, retry: () => { setError(null); void buildLooks(m, e, toneChoice); } });
+      setError({ msg, retry: () => { setError(null); void buildLooks(m, e, toneChoice, idemKey); } });
     } finally { setBusy(false); setPhase(null); }
   }
 
-  async function shuffle() {
+  async function shuffle(idemKey = newIdemKey()) {
     if (!session || busy) return;
     setBusy(true); setError(null);
     try {
-      const res = await api.postShuffle(session.sessionId);
+      const res = await api.postShuffle(session.sessionId, idemKey);
       await warmDecode(res.looks.map((l) => l.imageUrl));
       setLooks(res);
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : "Shuffle didn't land.";
-      setError({ msg, retry: () => { setError(null); void shuffle(); } });
+      setError({ msg, retry: () => { setError(null); void shuffle(idemKey); } });
     } finally { setBusy(false); }
   }
 

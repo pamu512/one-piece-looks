@@ -16,6 +16,7 @@
  */
 
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { timingSafeEqual } from "node:crypto";
 import { store, type SessionData } from "../session/store.js";
 import { YoucamError, runSkinAnalysis, runSkinTone, runMakeupVto, uploadFile } from "../youcam/client.js";
 import { mockSkinAnalysis, mockSkinTone } from "../youcam/mock.js";
@@ -26,6 +27,7 @@ import {
   seedFrom,
   oilyRule,
   type BuildInput,
+  type BuiltLook,
 } from "../domain/builder.js";
 import type {
   BuildLooksRequest,
@@ -47,6 +49,14 @@ export interface ApiConfig {
   baseUrl: string;
   rendersBudget: number;
   mock: boolean;
+  /**
+   * Shared demo token (DEMO_TOKEN env). When set, every /api request must
+   * carry it as x-demo-token header (or ?demoToken= query for the share
+   * card test path). This is NOT user auth - it is the lock on the door
+   * before HOST=0.0.0.0 exposes paid renders to venue wifi (review
+   * 2026-10-10). Unset = open (local dev default).
+   */
+  demoToken?: string | undefined;
 }
 
 const VALID_SKIN_TYPES: readonly SkinType[] = [
@@ -132,6 +142,23 @@ function errReply(reply: FastifyReply, status: number, error: string, code: stri
 
 export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
   const usingMock = () => cfg.mock || !cfg.apiKey;
+
+  // Shared-token gate: when DEMO_TOKEN is set, every /api call must present
+  // it. Constant-time compare; failures are 401 with the standard error
+  // shape so the client's calm-error path handles it. Health stays open.
+  if (cfg.demoToken) {
+    const expected = Buffer.from(cfg.demoToken);
+    app.addHook("onRequest", async (req, reply) => {
+      const url = req.raw.url ?? "";
+      if (!url.startsWith("/api/")) return;
+      const presented = (req.headers["x-demo-token"] ?? (req.query as Record<string, unknown>)?.demoToken) ?? "";
+      const got = Buffer.from(String(presented));
+      const ok = expected.length === got.length && timingSafeEqual(expected, got);
+      if (!ok) {
+        return errReply(reply, 401, "demo token required (x-demo-token header)", "demo_token_required", false);
+      }
+    });
+  }
 
   // ----- POST /api/session -----
   app.post("/api/session", async (req, reply) => {
@@ -277,12 +304,25 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
     event: Event,
     seedNonce: number,
     reply: FastifyReply,
+    idemKey?: string,
+    preReserved = false,
   ): Promise<LooksResult | undefined> {
     if (!s.lock || !s.skinType || !s.tone || !s.faceImageBase64) {
       errReply(reply, 409, "face analysis and tone must complete before building looks", "not_ready", false);
       return undefined;
     }
-    if (s.rendersUsed + 3 > s.rendersBudget) {
+    // Idempotent replay: a client retry of the SAME intent (same key) gets the
+    // stored result without spending the budget again. The client's callRetry
+    // auto-reposts on retryable errors; without this, a lost response on
+    // flaky venue wifi would silently buy 3 more paid renders.
+    if (idemKey && s.lastIdemKey === idemKey && s.lastIdemResult) {
+      return s.lastIdemResult as LooksResult;
+    }
+    // Reserve BEFORE building (review 2026-10-10): concurrent /looks and
+    // /shuffle must not both pass the check against stale rendersUsed.
+    // The shuffle route reserves before bumping shuffleCount; it passes
+    // preReserved so we do not double-charge.
+    if (!preReserved && !store.reserveRenders(s, 3)) {
       errReply(reply, 429, "render budget for this session is used up", "budget_exhausted", false);
       return undefined;
     }
@@ -295,34 +335,44 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
       seed: seedFrom(s.id, seedNonce),
     };
     const built = buildLooks(input);
-    const looks = [] as LooksResult["looks"];
-    for (const b of built) {
-      let imageUrl: string;
+    const renderOne = async (b: BuiltLook): Promise<LooksResult["looks"][number]> => {
       if (usingMock()) {
         // Mock renders composite the real effect list onto the user's own
         // face photo (API contract: imageUrl is a face render, never an
         // abstract color-bar card).
-        imageUrl = faceCardDataUrl(b.role, b.effects, input.seed, s.faceImageBase64!, s.landmarks);
-      } else {
-        // Upload once per session; reuse fileId across renders.
-        if (!s.faceFileId) {
-          const { fileId } = await uploadFile(cfg.apiKey!, s.faceImageBase64!, cfg.baseUrl);
-          s.faceFileId = fileId;
-        }
-        const res = await runMakeupVto(cfg.apiKey!, s.faceFileId!, b.effects, cfg.baseUrl);
-        imageUrl = res.imageUrl;
+        return assembleLook(b, faceCardDataUrl(b.role, b.effects, input.seed, s.faceImageBase64!, s.landmarks));
       }
-      looks.push(assembleLook(b, imageUrl));
+      // Upload once per session; reuse fileId across renders.
+      if (!s.faceFileId) {
+        const { fileId } = await uploadFile(cfg.apiKey!, s.faceImageBase64!, cfg.baseUrl);
+        s.faceFileId = fileId;
+      }
+      const res = await runMakeupVto(cfg.apiKey!, s.faceFileId!, b.effects, cfg.baseUrl);
+      return assembleLook(b, res.imageUrl);
+    };
+    let looks: LooksResult["looks"];
+    try {
+      // Parallel: three independent VTO tasks are 3 sequential 2-minute
+      // worst-case polls otherwise (~6 min builds). All three share the
+      // single reservation; a failure releases it.
+      looks = await Promise.all(built.map(renderOne));
+    } catch (e) {
+      store.releaseRenders(s, 3);
+      throw e;
     }
-    s.rendersUsed += 3;
     s.mood = mood;
     s.event = event;
-    return {
+    const result: LooksResult = {
       sessionId: s.id,
       looks,
       rendersLeft: s.rendersBudget - s.rendersUsed,
       lockApproximated: false,
     };
+    if (idemKey) {
+      s.lastIdemKey = idemKey;
+      s.lastIdemResult = result;
+    }
+    return result;
   }
 
   // ----- POST /api/session/:id/looks -----
@@ -339,8 +389,12 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
       s.tone = { source: "picker", depth: body.tone.depth, temperature: body.tone.temperature };
       s.toneFallback = false;
     }
+    // One idem key per (mood,event) intent per session: retries replay.
+    const idemKey = typeof body.idemKey === "string" && body.idemKey.length >= 8 && body.idemKey.length <= 64
+      ? `looks:${body.mood}:${body.event}:${body.idemKey}`
+      : undefined;
     try {
-      const result = await renderLooks(s, body.mood, body.event, s.shuffleCount, reply);
+      const result = await renderLooks(s, body.mood, body.event, s.shuffleCount, reply, idemKey);
       if (result) return result;
     } catch (e) {
       return handleYoucamError(e, reply);
@@ -355,12 +409,24 @@ export function registerRoutes(app: FastifyInstance, cfg: ApiConfig): void {
     if (!s.mood || !s.event) {
       return errReply(reply, 409, "build looks first", "not_built", false);
     }
-    if (s.rendersUsed + 3 > s.rendersBudget) {
-      return errReply(reply, 429, "render budget for this session is used up", "budget_exhausted", false);
+    const body = (req.body ?? {}) as { idemKey?: string };
+    // Namespace only — no shuffleCount in the key: the count advances on the
+    // first attempt, which would mint a different key for the retry and
+    // defeat the replay. Client keys are random per intent already.
+    const idemKey = typeof body.idemKey === "string" && body.idemKey.length >= 8 && body.idemKey.length <= 64
+      ? `shuffle:${body.idemKey}`
+      : undefined;
+    // A retried shuffle that already completed replays from renderLooks
+    // before any reservation; check that first so it does not 429.
+    if (!(idemKey && s.lastIdemKey === idemKey && s.lastIdemResult)) {
+      if (!store.reserveRenders(s, 3)) {
+        return errReply(reply, 429, "render budget for this session is used up", "budget_exhausted", false);
+      }
     }
     s.shuffleCount += 1;
     try {
-      const result = await renderLooks(s, s.mood, s.event, s.shuffleCount, reply);
+      // renderLooks skips its own reservation when the route pre-reserved.
+      const result = await renderLooks(s, s.mood, s.event, s.shuffleCount, reply, idemKey, true);
       if (result) return result;
     } catch (e) {
       return handleYoucamError(e, reply);

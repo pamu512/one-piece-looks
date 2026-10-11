@@ -172,6 +172,12 @@ export interface BuildLooksRequest {
   event: Event;
   /** Re-send in case analysis went the fallback route. */
   tone?: { depth: ToneDepth; temperature: ToneTemperature };
+  /**
+   * Client-generated idempotency key (one per build intent). A retry with
+   * the same key replays the stored result instead of spending 3 more paid
+   * renders (money safety, review 2026-10-10).
+   */
+  idemKey?: string;
 }
 
 /** Response with the three looks. */

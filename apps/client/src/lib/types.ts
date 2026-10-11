@@ -36,7 +36,8 @@ export interface SessionInfo { sessionId: string; rendersBudget: number; mock: b
 
 export interface FaceResult {
   sessionId: string;
-  skinType: SkinType;
+  /** Null when skin analysis failed server-side (contract: nullable). */
+  skinType: SkinType | null;
   toneFallback: boolean;
   tone: Tone;
   toneHex: string;
@@ -71,9 +72,14 @@ export class ApiError extends Error {
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  // Demo token: set VITE_DEMO_TOKEN at build/dev time to match the server's
+  // DEMO_TOKEN (required whenever the server is exposed beyond localhost).
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const demoToken = import.meta.env.VITE_DEMO_TOKEN as string | undefined;
+  if (demoToken) headers["x-demo-token"] = demoToken;
   const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
     ...init,
+    headers: { ...headers, ...(init?.headers as Record<string, string> | undefined) },
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -85,6 +91,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     });
   }
   return body as T;
+}
+
+/** Idempotency key for one build/shuffle intent (money safety with retries). */
+export function newIdemKey(): string {
+  return Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
 /** Optional face landmarks sent with POST /face (fractional 4:5 coords). */
@@ -134,14 +145,17 @@ export const api = {
       body: JSON.stringify({ depth, temperature }),
     }),
 
-  postLooks: (id: string, mood: Mood, event: Event) =>
+  postLooks: (id: string, mood: Mood, event: Event, idemKey?: string) =>
     callRetry<LooksResult>(`/api/session/${id}/looks`, {
       method: "POST",
-      body: JSON.stringify({ mood, event }),
+      body: JSON.stringify({ mood, event, ...(idemKey ? { idemKey } : {}) }),
     }),
 
-  postShuffle: (id: string) =>
-    callRetry<LooksResult>(`/api/session/${id}/shuffle`, { method: "POST", body: "{}" }),
+  postShuffle: (id: string, idemKey?: string) =>
+    callRetry<LooksResult>(`/api/session/${id}/shuffle`, {
+      method: "POST",
+      body: JSON.stringify(idemKey ? { idemKey } : {}),
+    }),
 };
 
 export const TONE_DEPTHS = ["01", "02", "03", "04", "05", "06"] as const;

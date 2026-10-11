@@ -33,6 +33,13 @@ export interface SessionData {
   faceFileId?: string;
   /** Optional client face landmarks for mock compositing (fractions). */
   landmarks?: import("../youcam/facecard.js").FaceLandmarks | undefined;
+  /**
+   * Idempotency: the client sends a key per build/shuffle intent; the last
+   * completed result for that key is replayed instead of re-rendering, so a
+   * lost-response retry cannot double-spend the paid budget.
+   */
+  lastIdemKey?: string;
+  lastIdemResult?: unknown;
 }
 
 const TTL_MS = 2 * 60 * 60 * 1000; // 2h; hackathon demo sessions
@@ -44,6 +51,22 @@ export class SessionStore {
 
   constructor(ttlMs = TTL_MS) {
     this.ttlMs = ttlMs;
+  }
+
+  /**
+   * Start the TTL sweeper (review 2026-10-10: the field existed but nothing
+   * started it, so expired sessions were only evicted lazily on create()).
+   * unref() keeps the timer from holding the process open on shutdown.
+   */
+  startSweeper(intervalMs = 60_000): void {
+    if (this.sweeper) return;
+    this.sweeper = setInterval(() => this.sweep(), intervalMs);
+    this.sweeper.unref();
+  }
+
+  stopSweeper(): void {
+    if (this.sweeper) clearInterval(this.sweeper);
+    this.sweeper = undefined;
   }
 
   private readonly ttlMs: number;
@@ -84,6 +107,23 @@ export class SessionStore {
     Object.assign(s, patch);
     s.lastUsedAt = Date.now();
     return s;
+  }
+
+  /**
+   * Reserve render budget BEFORE any paid call (review 2026-10-10: the old
+   * check-then-await let two concurrent /looks both pass against stale
+   * state and both render). Returns false when the budget cannot cover it.
+   * Roll back with releaseRenders on failure.
+   */
+  reserveRenders(s: SessionData, n: number): boolean {
+    if (s.rendersUsed + n > s.rendersBudget) return false;
+    s.rendersUsed += n;
+    return true;
+  }
+
+  /** Roll back a reservation when the render failed before spending. */
+  releaseRenders(s: SessionData, n: number): void {
+    s.rendersUsed = Math.max(0, s.rendersUsed - n);
   }
 
   private sweep(): void {
