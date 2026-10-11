@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 
 // Headless Chromium rasterizes the SVG data URLs exactly as the client
 // browser does (blend modes, blur filters, embedded JPEG).

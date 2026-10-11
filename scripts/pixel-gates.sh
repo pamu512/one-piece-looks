@@ -16,7 +16,7 @@ fail=0
 skip_reason=""
 
 command -v ffmpeg >/dev/null 2>&1 || skip_reason="ffmpeg missing"
-[ -d /tmp/opl-pw/node_modules/playwright ] || skip_reason="playwright bundle missing (/tmp/opl-pw)"
+node -e "require('playwright')" >/dev/null 2>&1 || skip_reason="playwright devDependency missing (npm install)"
 if [ -n "$skip_reason" ]; then
   echo "pixel-gates: SKIP ($skip_reason) — run probes manually: demos/probe-*.mjs"
   exit 0

@@ -1895,12 +1895,13 @@ export interface LipEdge {
  * otherwise the full height 2*ry). sigmaText is toFixed of the unrounded
  * measure. ry 37.49 with no band yields 1.687; the 1-decimal data-ry 37.5
  * yields 1.688, so the attribute is the wrong input.
- * A short lip (full height under LIP_SMALL_PX) drops the floor and uses
- * the edge ramp. A taller mouth, even with a narrow band, keeps a 2.5 px
- * erode (radius 3) and a 1 to 3 px feather so the skirt stays off the outline.
- * Feather on that taller mouth stops growing past LIP_FEATHER_KNEE.
- * The hole guard still follows the uncapped feather, so holding the
- * skirt in does not open the teeth.
+ * A short VERMILLION BAND drops the floor and uses the edge ramp. The band
+ * (outer minus hole) is the paint surface; a tall open mouth with a thin
+ * band (face-test: 56px full, 12.8px band) is small WHERE IT PAINTS — keying
+ * smallness on the full height left it on the normal path, whose 2.5px
+ * erode + 1px guard pared a 12.8px band by ~40%. A closed mouth (no hole)
+ * keeps using the full height. Feather on a tall mouth stops growing past
+ * LIP_FEATHER_KNEE.
  */
 export function lipVermillionEdge(interEye: number, lipRy: number, bandPx?: number): LipEdge {
   const dist = Number.isFinite(interEye) && interEye > 1 ? interEye : 304;
@@ -1908,10 +1909,10 @@ export function lipVermillionEdge(interEye: number, lipRy: number, bandPx?: numb
   const full = ry * 2;
   const band = typeof bandPx === "number" && Number.isFinite(bandPx) && bandPx > 1 ? bandPx : full;
   const measure = Math.min(full, Math.max(1, band));
-  // Inclusive: a mouth exactly AT the threshold (face-test, full=56) is still
-  // small; the exclusive < dropped it onto the normal-mouth erode path, where
-  // the 2.5px erode + feather pared a thin lip to a sliver of paint.
-  const small = full <= LIP_SMALL_PX;
+  // Inclusive: a band exactly AT the threshold is still small; the exclusive
+  // < dropped it onto the normal-mouth erode path, which pared a thin
+  // vermillion to a sliver of paint.
+  const small = measure <= LIP_SMALL_PX;
   // Normal mouths erode 2.5 px (radius 3) so the soft skirt stays inside a blurry
   // outline. A short mouth may drop below 1 px and skip the erode.
   const erode = small ? Math.min(1.5, 0.08 * measure) : 2.5;

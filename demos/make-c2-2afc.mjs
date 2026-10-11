@@ -24,7 +24,7 @@
  *        TRIALS=3 (per pair; verdict asks 3)
  *        MOOD_EVENT="Soft|Casual" (default Soft|Casual - the shipped default)
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

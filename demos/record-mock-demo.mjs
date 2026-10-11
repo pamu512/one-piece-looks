@@ -1,4 +1,4 @@
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { mkdirSync, copyFileSync, statSync, readdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

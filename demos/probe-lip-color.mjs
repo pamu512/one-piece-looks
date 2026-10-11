@@ -14,7 +14,7 @@
  * Usage: node demos/probe-lip-color.mjs
  * Env: FACES="face-d-tan" OUT=/tmp/opl-lipcolor
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";

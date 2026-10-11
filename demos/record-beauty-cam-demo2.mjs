@@ -11,7 +11,7 @@
  * Automated gates: first worn look <= 14s; no static hold > 4s (frame probe);
  * share blob > 0 B; duration <= 60s; zero console errors.
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync, copyFileSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

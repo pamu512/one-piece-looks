@@ -16,7 +16,7 @@
  *   14  first worn look on screen <= 15s into the flow.
  * Prints PASS/FAIL per check with numbers; exit 0 only if all pass.
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

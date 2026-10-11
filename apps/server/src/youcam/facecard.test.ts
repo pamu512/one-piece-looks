@@ -826,11 +826,15 @@ describe("lip edge scale", () => {
     expect(under.measure).toBeCloseTo(10, 5);
     expect(under.radius).toBe(0);
     expect(lipEdgeRamp(under.measure).hi).toBeCloseTo(0.22, 2);
+    // Band-keyed smallness (2026-10-10): a tall mouth with a thin band
+    // (face-test: full 56.08 over the threshold, band 12.8) is small WHERE
+    // IT PAINTS. Full-height keying left it on the 2.5px-erode normal path,
+    // paring the band ~40% — the probe-measured under-fill.
     const over = lipVermillionEdge(240, (LIP_SMALL_PX + 2) / 2, 10);
-    expect(over.edgeRamp).toBe(false);
-    expect(over.radius).toBe(3);
-    expect(over.sigma).toBeGreaterThanOrEqual(1);
-    expect(over.sigma).toBeLessThanOrEqual(3);
+    expect(over.edgeRamp).toBe(true);
+    expect(over.measure).toBeCloseTo(10, 5);
+    expect(over.radius).toBe(0);
+    expect(lipVermillionEdge(240, (LIP_SMALL_PX + 2) / 2).edgeRamp).toBe(false);
     expect(lipVermillionEdge(240, 37.49, 0).sigmaText).toBe("1.687");
     expect(lipVermillionEdge(Number.POSITIVE_INFINITY, 37.49).sigma).toBeLessThanOrEqual(3);
   });
@@ -853,21 +857,23 @@ describe("lip edge scale", () => {
     const glossy = lipVermillionEdge(400, 45, 16);
     expect(glossy.measure).toBeCloseTo(16, 5);
     expect(glossy.measure).toBeGreaterThanOrEqual(LIP_THIN_PX);
-    expect(glossy.edgeRamp).toBe(false);
-    expect(glossy.radius).toBe(3);
-    expect(glossy.sigma).toBeGreaterThanOrEqual(1);
-    expect(glossy.sigma).toBeLessThanOrEqual(3);
-    expect(glossy.guard).toBeGreaterThanOrEqual(1);
+    // 16px band on a 90px mouth: band-keyed smallness puts this on the thin
+    // ramp (erode 1.28 -> radius 1, vs the old radius-3 that pared the
+    // band); the probe showed the normal path under-paints this shape.
+    expect(glossy.edgeRamp).toBe(true);
+    expect(glossy.radius).toBe(1);
+    expect(glossy.sigma).toBeGreaterThanOrEqual(0.2);
     expect(glossy.guard).toBeLessThanOrEqual(3);
 
     const narrowOnTall = lipVermillionEdge(400, 40, 10);
     expect(narrowOnTall.measure).toBeCloseTo(10, 5);
     expect(narrowOnTall.measure).toBeLessThan(LIP_THIN_PX);
     expect(40 * 2).toBeGreaterThanOrEqual(LIP_SMALL_PX);
-    expect(narrowOnTall.edgeRamp).toBe(false);
-    expect(narrowOnTall.radius).toBe(3);
-    expect(narrowOnTall.sigma).toBeGreaterThanOrEqual(1);
-    expect(narrowOnTall.sigma).toBeLessThanOrEqual(3);
+    // 10px band on an 80px mouth: same band-keyed smallness — thin ramp, no
+    // erode. Full-height keying (edgeRamp false, radius 3) was the bug.
+    expect(narrowOnTall.edgeRamp).toBe(true);
+    expect(narrowOnTall.radius).toBe(0);
+    expect(narrowOnTall.sigma).toBeGreaterThanOrEqual(0.2);
   });
 });
 

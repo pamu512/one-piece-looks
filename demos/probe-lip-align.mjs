@@ -22,7 +22,7 @@
  *      set LIPGT=off to fall back to the redness reference)
  * Needs: mock server :8787, vite :5173.
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";

@@ -5,7 +5,7 @@
  * rasterizes each carousel slide in-page and measures pairwise pixel
  * deltas (with real client landmarks) plus hold-to-compare behavior.
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 

@@ -20,7 +20,7 @@
  * Usage: node demos/probe-percept-compressed.mjs
  * Env: FACES="face-c-blonde,face-d-tan" (default: both)
  */
-import { chromium } from "/tmp/opl-pw/node_modules/playwright/index.mjs";
+import { chromium } from "playwright";
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
