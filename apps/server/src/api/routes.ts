@@ -105,7 +105,7 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
   const lipMeanL = labL(r.lipMeanL);
   const lipMeanA = labAB(r.lipMeanA);
   const lipMeanB = labAB(r.lipMeanB);
-  const SHAPES = ["long", "round", "square", "heart", "triangle", "diamond", "oval"];
+  const SHAPES = ["long", "round", "square", "heart", "triangle", "diamond", "oval", "pear", "oblong", "rectangle", "invTriangle"];
   const shape = typeof r.faceShape === "string" && SHAPES.includes(r.faceShape) ? r.faceShape : undefined;
   const lm: FaceLandmarks = {
     ...(box(r.faceBox) ? { faceBox: box(r.faceBox) } : {}),

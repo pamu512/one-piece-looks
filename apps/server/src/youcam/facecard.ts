@@ -1351,33 +1351,43 @@ function stampsFor(category: string, lm: FaceLandmarks | undefined): Stamp[] {
           // patch pair. Ribbons are approximated from the face box; the
           // mesh-ribbon rendering lives client-side for the coach overlay.
           const shape = lm?.faceShape;
+          // Nine-label cascade (2026-10-11) resolves onto the seven cited
+          // placements: pear=triangle (jaw edges), oblong=long (shorten the
+          // vertical), rectangle=square placements + long's hairline/under-
+          // chin, invTriangle=heart inverted (tempple shadow, jaw light).
+          const rule: string =
+            shape === "pear" ? "triangle"
+            : shape === "oblong" ? "long"
+            : shape === "rectangle" ? "square"
+            : shape === "invTriangle" ? "heart"
+            : (shape ?? "");
           const W = CANVAS_W, H = CANVAS_H;
           const mkRibbon = (x0: number, x1: number, y0: number, y1: number, wFrac: number) => {
             const cx = (f.x + f.w * (x0 + x1) / 2) * W;
             const cy = (f.y + f.h * (y0 + y1) / 2) * H;
             return stampFrom(roundedPoly(cx, cy, f.w * W * wFrac, Math.max(4, Math.hypot((x1 - x0) * f.w * W, (y1 - y0) * f.h * H) / 2), 12));
           };
-          if (shape === "long") {
+          if (rule === "long") {
             // Hairline top + under-chin: shadow reads the face shorter.
             return [
               stampFrom(roundedPoly((f.x + f.w / 2) * W, (f.y + f.h * 0.06) * H, f.w * W * 0.3, f.h * H * 0.035, 12)),
               stampFrom(roundedPoly((f.x + f.w / 2) * W, (f.y + f.h * 0.97) * H, f.w * W * 0.26, f.h * H * 0.03, 12)),
             ];
           }
-          if (shape === "heart" || shape === "oval" || shape === "diamond") {
+          if (rule === "heart" || rule === "oval" || rule === "diamond") {
             // Temples (+ cheek tips for diamond); jaw stays light.
             const stamps = [
               mkRibbon(0.1, 0.18, 0.28, 0.42, 0.045),
               mkRibbon(0.82, 0.9, 0.28, 0.42, 0.045),
             ];
-            if (shape === "diamond") {
+            if (rule === "diamond") {
               // On the cheekbone tips, not underneath: minimize width.
               stamps.push(mkRibbon(0.13, 0.3, 0.48, 0.44, 0.04));
               stamps.push(mkRibbon(0.7, 0.87, 0.48, 0.44, 0.04));
             }
             return mirrorStamps(stamps, lm);
           }
-          if (shape === "triangle") {
+          if (rule === "triangle") {
             // Jaw edges only: light carries up and away.
             return mirrorStamps([
               mkRibbon(0.08, 0.24, 0.78, 0.9, 0.05),
@@ -1389,7 +1399,7 @@ function stampsFor(category: string, lm: FaceLandmarks | undefined): Stamp[] {
           const cy = (f.y + f.h * 0.62) * H;
           const mk = (frac: number) => stampFrom(roundedPoly((f.x + f.w * frac) * W, cy, f.w * W * 0.08, f.h * H * 0.1, 12));
           const base = [mk(0.14), mk(0.86)];
-          if (shape === "round" || shape === "square") {
+          if (rule === "round" || rule === "square") {
             base.push(mkRibbon(0.1, 0.17, 0.3, 0.44, 0.04));
             base.push(mkRibbon(0.83, 0.9, 0.3, 0.44, 0.04));
           }

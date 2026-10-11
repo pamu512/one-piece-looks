@@ -14,11 +14,13 @@ import { deriveShades, type CoachShades } from "./shades.ts";
 
 export interface RulesFile {
   schema: number;
+  aliases?: Record<string, string>;
   school: string;
   verbs: Record<string, string>;
   shapes: Record<
-    FaceShape,
+    string,
     {
+      goal?: string;
       contour?: { ribbons: RibbonId[]; note?: string; source?: string };
       blush?: { zone: string; angle_deg: number; height: string; placement?: string; source?: string };
       brow?: { arch: string; source?: string };
@@ -72,8 +74,12 @@ function step(verb: string, sentence: string): CoachStep {
  */
 export function buildPlan(input: CoachPlanInput): CoachStep[] {
   const { classification } = input;
-  const shape: FaceShape = rules.shapes[classification.primary] ? classification.primary : "oval";
-  const spec = rules.shapes[shape];
+  // Nine-label cascade -> cited seven-rule chart (rules.json aliases,
+  // schema 3). Unknown labels still fall back to oval - never gate a user.
+  const aliased = rules.aliases?.[classification.primary];
+  const resolved = aliased ?? classification.primary;
+  const shape: FaceShape = (rules.shapes[resolved] ? resolved : "oval") as FaceShape;
+  const spec = rules.shapes[shape]!;
   const shades: CoachShades = deriveShades(input.skinHex, input.lockHex, input.depth);
   const steps: CoachStep[] = [];
 

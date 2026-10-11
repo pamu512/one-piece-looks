@@ -1,7 +1,14 @@
 {
   "$comment1": "MUA knowledge as data - FACE-GEOMETRY.md section 6. One canonical chart system: the classic contour-chart taxonomy (oval/round/square/long/heart/diamond/triangle). Editable without code; every rule carries source provenance.",
   "$comment2": "Copy rule: verbs about light and placement (lengthen, soften, lift, define). Never flaw language (fix, slim, problem, reduce). plan.ts validates verbs against this stance.",
-  "schema": 2,
+  "schema": 3,
+  "aliases": {
+    "$comment": "The nine-label cascade (faceShape.ts 2026-10-11) maps onto the seven cited chart rules. pear = the chart's triangle (jaw wider than forehead); oblong = long; rectangle = long proportions with a near-square hairline, so long's shorten-the-vertical placements apply with square's corner softening; invTriangle = heart's balance-the-upper-width goal inverted - light stays at the jaw, shadow at the temples.",
+    "pear": "triangle",
+    "oblong": "long",
+    "rectangle": "square",
+    "invTriangle": "heart"
+  },
   "school": "classic contour-chart taxonomy; per-shape placements cross-checked against the e.l.f. Cosmetics face-shape contour guide (https://www.elfcosmetics.com/blogs/the-elf-word/how-to-contour-based-on-your-face-shape, read 2026-10-11) and Wikipedia 'Contouring' (technique; Max Factor's 1945 first per-face-shape contour tutorial). Perception goals grounded in Wikipedia 'Facial symmetry' and 'Physical attractiveness' (symmetry and averageness make independent contributions; dimorphism/neoteny markers). Marquardt phi-mask single-template ideal rejected: cross-population fit fails.",
   "verbs": {
     "contour": "define",
