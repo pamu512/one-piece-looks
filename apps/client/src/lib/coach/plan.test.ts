@@ -46,7 +46,7 @@ test("every shape in rules.json produces a non-empty plan", () => {
 });
 
 test("nine labels resolve their own rules", () => {
-  assert.equal(rules.schema, 3);
+  assert.equal(rules.schema, 4); // 4: blush motions + application order added
   assert.deepEqual([...Object.keys(rules.shapes)].sort(), [...FACE_SHAPES].sort());
   assert.equal("long" in rules.shapes, false);
   assert.equal("triangle" in rules.shapes, false);

@@ -985,21 +985,21 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
           <p className="coach-live-hint">
             {state?.how ?? (state?.layer === "highlight" ? "Light lands on the high points" : "Shade follows the lines of your shape")}
           </p>
-          <div className="coach-live-actions">
-            <button
-              className={`mini-chip${state?.layer === "contour" ? " on" : ""}`}
-              aria-pressed={state?.layer === "contour"}
-              onClick={() => { handleRef.current?.setLayer("contour"); setState((s) => (s ? { ...s, layer: "contour" } : s)); }}
-            >
-              Shade
-            </button>
-            <button
-              className={`mini-chip${state?.layer === "highlight" ? " on" : ""}`}
-              aria-pressed={state?.layer === "highlight"}
-              onClick={() => { handleRef.current?.setLayer("highlight"); setState((s) => (s ? { ...s, layer: "highlight" } : s)); }}
-            >
-              Light
-            </button>
+          <div className="coach-live-actions" role="group" aria-label="Layers in order">
+            {([
+              ["contour", "1 Shade"],
+              ["blush", "2 Blush"],
+              ["highlight", "3 Light"],
+            ] as const).map(([l, label]) => (
+              <button
+                key={l}
+                className={`mini-chip${state?.layer === l ? " on" : ""}`}
+                aria-pressed={state?.layer === l}
+                onClick={() => { handleRef.current?.setLayer(l); setState((s) => (s ? { ...s, layer: l } : s)); }}
+              >
+                {label}
+              </button>
+            ))}
             <button className="mini-chip" onClick={onExit}>Looks demo</button>
           </div>
         </div>
