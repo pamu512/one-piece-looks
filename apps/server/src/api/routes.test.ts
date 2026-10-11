@@ -499,3 +499,58 @@ describe("money safety (review 2026-10-10)", () => {
     expect(ok.statusCode).toBe(200);
   });
 });
+
+describe("face shape on the face route", () => {
+  function contourCy(svg: string): number[] {
+    const tags = svg.match(/<path\b[^>]*>/g) ?? [];
+    const ys: number[] = [];
+    for (const tag of tags) {
+      if (!/\bdata-zone="contour"/.test(tag)) continue;
+      const cy = tag.match(/\bdata-cy="([^"]+)"/);
+      if (cy) ys.push(Number(cy[1]));
+    }
+    return ys.sort((a, b) => a - b);
+  }
+
+  async function statementCy(faceShape?: string): Promise<{ cy: number[]; svg: string }> {
+    const app = makeApp();
+    const { sessionId } = await makeSession(app);
+    const face = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/face`,
+      payload: {
+        faceImageBase64: FACE_B64,
+        lock: LOCK,
+        landmarks: {
+          faceBox: { x: 0.2, y: 0.1, w: 0.6, h: 0.8 },
+          ...(faceShape !== undefined ? { faceShape } : {}),
+        },
+      },
+    });
+    expect(face.statusCode).toBe(200);
+    const looks = await app.inject({
+      method: "POST",
+      url: `/api/session/${sessionId}/looks`,
+      payload: { mood: "Boss", event: "Office" },
+    });
+    expect(looks.statusCode).toBe(200);
+    const body = looks.json<{ looks: { role: string; imageUrl: string }[] }>();
+    const statement = body.looks.find((l) => l.role === "statement");
+    expect(statement).toBeTruthy();
+    const svg = Buffer.from(statement!.imageUrl.split(",")[1]!, "base64").toString("utf8");
+    return { cy: contourCy(svg), svg };
+  }
+
+  it("remaps long onto oblong contour and drops an unknown label", async () => {
+    const oblong = await statementCy("oblong");
+    const legacy = await statementCy(" LONG ");
+    const dropped = await statementCy("nope");
+    const absent = await statementCy(undefined);
+    expect(oblong.svg).toContain("#b3122e");
+    expect(legacy.cy).toEqual(oblong.cy);
+    expect(dropped.cy).toEqual(absent.cy);
+    expect(dropped.cy).not.toEqual(oblong.cy);
+    expect(oblong.cy[0]).toBeLessThan(250);
+    expect(oblong.cy[oblong.cy.length - 1]).toBeGreaterThan(1000);
+  });
+});

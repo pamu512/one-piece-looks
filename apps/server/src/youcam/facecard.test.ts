@@ -11,6 +11,7 @@ import {
   blushFalloff,
   blushMaskWeight,
   blushSpread,
+  canonicalFaceShape,
   faceCardDataUrl,
   faceCardSvg,
   featherSigma,
@@ -1049,5 +1050,73 @@ describe("blush gaussian", () => {
     const statement = zoneAlpha("blush", 50, "statement");
     expect(anchor).toBeLessThan(lift);
     expect(lift).toBeLessThan(statement);
+  });
+});
+
+describe("shape-aware contour", () => {
+  const BOX: FaceLandmarks = { faceBox: { x: 0.2, y: 0.1, w: 0.6, h: 0.8 } };
+  const CONTOUR: VtoEffect[] = [
+    { category: "contour", palettes: [{ color: "#5c3a28", colorIntensity: 40 }] },
+  ];
+
+  function contourCy(shape?: string): number[] {
+    const svg = faceCardSvg("lift", CONTOUR, 1, FACE_B64, {
+      ...BOX,
+      ...(shape !== undefined ? { faceShape: shape } : {}),
+    });
+    return zonePaths(svg, "contour").map((p) => p.cy).sort((a, b) => a - b);
+  }
+
+  it("accepts the nine labels and the long/triangle aliases", () => {
+    for (const shape of ["oval", "round", "square", "pear", "heart", "diamond", "oblong", "rectangle", "invTriangle"]) {
+      expect(canonicalFaceShape(shape)).toBe(shape);
+    }
+    expect(canonicalFaceShape(" long ")).toBe("oblong");
+    expect(canonicalFaceShape("LONG")).toBe("oblong");
+    expect(canonicalFaceShape("triangle")).toBe("pear");
+    expect(canonicalFaceShape("Triangle")).toBe("pear");
+    expect(canonicalFaceShape("invtriangle")).toBeUndefined();
+    expect(canonicalFaceShape("nope")).toBeUndefined();
+    expect(canonicalFaceShape("")).toBeUndefined();
+    expect(canonicalFaceShape("  ")).toBeUndefined();
+    expect(canonicalFaceShape(null)).toBeUndefined();
+    expect(canonicalFaceShape(1)).toBeUndefined();
+  });
+
+  it("places hairline, jaw, and temple shadow on different bands", () => {
+    const shorten = contourCy("oblong");
+    expect(contourCy("rectangle")).toEqual(shorten);
+    expect(contourCy("long")).toEqual(shorten);
+    expect(contourCy(" LONG ")).toEqual(shorten);
+    expect(shorten[0]).toBeLessThan(250);
+    expect(shorten[shorten.length - 1]!).toBeGreaterThan(1000);
+
+    const jaw = contourCy("pear");
+    expect(contourCy("triangle")).toEqual(jaw);
+    expect(jaw.every((y) => y > 900)).toBe(true);
+    expect(jaw).not.toEqual(shorten);
+
+    const temples = contourCy("heart");
+    expect(contourCy("invTriangle")).toEqual(temples);
+    expect(contourCy("oval")).toEqual(temples);
+    expect(temples.every((y) => y > 400 && y < 560)).toBe(true);
+    expect(temples).not.toEqual(shorten);
+
+    const diamond = contourCy("diamond");
+    expect(diamond.length).toBeGreaterThan(temples.length);
+    expect(diamond.some((y) => y > 400 && y < 560)).toBe(true);
+    expect(diamond.some((y) => y >= 560 && y < 700)).toBe(true);
+    expect(diamond.some((y) => y > 1000)).toBe(false);
+
+    const round = contourCy("round");
+    expect(contourCy("square")).toEqual(round);
+    expect(round.some((y) => y > 400 && y < 560)).toBe(true);
+    expect(round.some((y) => y > 680 && y < 820)).toBe(true);
+
+    const fallback = contourCy(undefined);
+    expect(contourCy("nope")).toEqual(fallback);
+    expect(fallback.every((y) => y > 680 && y < 820)).toBe(true);
+    expect(fallback).not.toEqual(shorten);
+    expect(fallback).not.toEqual(round);
   });
 });

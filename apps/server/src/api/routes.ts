@@ -20,7 +20,7 @@ import { timingSafeEqual } from "node:crypto";
 import { store, type SessionData } from "../session/store.js";
 import { YoucamError, runSkinAnalysis, runSkinTone, runMakeupVto, uploadFile } from "../youcam/client.js";
 import { mockSkinAnalysis, mockSkinTone } from "../youcam/mock.js";
-import { faceCardDataUrl, type FaceLandmarks } from "../youcam/facecard.js";
+import { canonicalFaceShape, faceCardDataUrl, type FaceLandmarks } from "../youcam/facecard.js";
 import {
   buildLooks,
   assembleLook,
@@ -105,8 +105,7 @@ function sanitizeLandmarks(raw: unknown): FaceLandmarks | undefined {
   const lipMeanL = labL(r.lipMeanL);
   const lipMeanA = labAB(r.lipMeanA);
   const lipMeanB = labAB(r.lipMeanB);
-  const SHAPES = ["long", "round", "square", "heart", "triangle", "diamond", "oval", "pear", "oblong", "rectangle", "invTriangle"];
-  const shape = typeof r.faceShape === "string" && SHAPES.includes(r.faceShape) ? r.faceShape : undefined;
+  const shape = canonicalFaceShape(r.faceShape);
   const lm: FaceLandmarks = {
     ...(box(r.faceBox) ? { faceBox: box(r.faceBox) } : {}),
     ...(poly(r.lip) ? { lip: poly(r.lip) } : {}),

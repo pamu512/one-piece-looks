@@ -9,18 +9,16 @@
  */
 
 import rulesJson from "./rules.json" with { type: "json" };
-import type { Classification, FaceShape } from "./faceShape.ts";
+import { FACE_SHAPES, type Classification, type FaceShape } from "./faceShape.ts";
 import { deriveShades, type CoachShades } from "./shades.ts";
 
 export interface RulesFile {
   schema: number;
-  aliases?: Record<string, string>;
   school: string;
   verbs: Record<string, string>;
   shapes: Record<
-    string,
+    FaceShape,
     {
-      goal?: string;
       contour?: { ribbons: RibbonId[]; note?: string; source?: string };
       blush?: { zone: string; angle_deg: number; height: string; placement?: string; source?: string };
       brow?: { arch: string; source?: string };
@@ -31,6 +29,10 @@ export interface RulesFile {
 }
 
 export const rules: RulesFile = rulesJson as unknown as RulesFile;
+
+for (const id of FACE_SHAPES) {
+  if (!rules.shapes[id]) throw new Error(`rules.json missing shape "${id}"`);
+}
 
 type RibbonId = string;
 
@@ -68,18 +70,19 @@ function step(verb: string, sentence: string): CoachStep {
   return { zoneIds: [], verb, oneSentence: trimmed, shadeHex: "#000000", brushDirection: "" };
 }
 
+function isChartShape(v: string): v is FaceShape {
+  return (FACE_SHAPES as readonly string[]).includes(v);
+}
+
 /**
- * Build the ordered plan. Falls back to the oval rules for unknown shapes
- * (never gate a user out of the product).
+ * Build the ordered plan. A chart label uses its own rules. Anything else
+ * falls back to oval (never gate a user out of the product).
  */
 export function buildPlan(input: CoachPlanInput): CoachStep[] {
   const { classification } = input;
-  // Nine-label cascade -> cited seven-rule chart (rules.json aliases,
-  // schema 3). Unknown labels still fall back to oval - never gate a user.
-  const aliased = rules.aliases?.[classification.primary];
-  const resolved = aliased ?? classification.primary;
-  const shape: FaceShape = (rules.shapes[resolved] ? resolved : "oval") as FaceShape;
-  const spec = rules.shapes[shape]!;
+  const primary = classification.primary;
+  const spec = isChartShape(primary) ? rules.shapes[primary] : rules.shapes.oval;
+  if (!spec) throw new Error(`no coach rules for shape "${primary}"`);
   const shades: CoachShades = deriveShades(input.skinHex, input.lockHex, input.depth);
   const steps: CoachStep[] = [];
 
@@ -87,7 +90,7 @@ export function buildPlan(input: CoachPlanInput): CoachStep[] {
   if (spec.contour && spec.contour.ribbons.length > 0) {
     const s = step(rules.verbs.contour ?? "define", spec.contour.note ?? "Trace the light along the lines, one side at a time.");
     s.zoneIds = spec.contour.ribbons.slice();
-    s.shadeHex = input.oily ? shades.contour : shades.contour;
+    s.shadeHex = shades.contour;
     s.brushDirection = spec.contour.ribbons
       .map((r) => rules.brushDirections[r] ?? "along the line, feathered")
       .filter((v, i, a) => a.indexOf(v) === i)

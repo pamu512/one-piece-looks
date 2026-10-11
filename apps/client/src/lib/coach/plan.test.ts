@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyFace } from "./faceShape.ts";
+import { classifyFace, FACE_SHAPES, type FaceShape } from "./faceShape.ts";
 import { buildPlan, rules, type CoachPlanInput } from "./plan.ts";
 import { deriveShades, luminance, mix } from "./shades.ts";
 
@@ -18,7 +18,7 @@ const base: CoachPlanInput = {
 
 test("oval default builds the full 4-step plan in MUA order", () => {
   const plan = buildPlan(base);
-  // oval (schema 2): light temple+shelf contour, blush, brow, highlight —
+  // oval (schema 3): light temple+shelf contour, blush, brow, highlight —
   // "enhance, don't reshape" still lights the temples per the cited guide.
   assert.equal(plan.length, 4, `steps: ${plan.map((s) => s.verb).join(",")}`);
   assert.equal(plan[0]!.verb, "define");
@@ -31,12 +31,73 @@ test("every shape in rules.json produces a non-empty plan", () => {
   for (const shape of Object.keys(rules.shapes)) {
     const plan = buildPlan({ ...base, classification: { primary: shape as never, secondary: "oval", confidence: 0.8, margins: {} } });
     assert.ok(plan.length >= 2, `${shape}: ${plan.length} steps`);
+    const ribbons = rules.shapes[shape as FaceShape]?.contour?.ribbons ?? [];
+    assert.deepEqual(plan[0]!.zoneIds.slice().sort(), ribbons.slice().sort(), `${shape} contour`);
+    for (const id of ribbons) {
+      assert.equal(typeof rules.brushDirections[id], "string", `${shape} ribbon ${id}`);
+    }
     for (const s of plan) {
       assert.ok(s.zoneIds !== undefined, `${shape} step has zoneIds`);
       assert.ok(s.oneSentence.length > 0 && s.oneSentence.endsWith("."), `${shape} sentence complete`);
       assert.ok(/^#[0-9a-f]{6}$/.test(s.shadeHex), `${shape} shade hex well-formed`);
       assert.ok(s.brushDirection.length > 0, `${shape} brush direction present`);
     }
+  }
+});
+
+test("nine labels resolve their own rules", () => {
+  assert.equal(rules.schema, 3);
+  assert.deepEqual([...Object.keys(rules.shapes)].sort(), [...FACE_SHAPES].sort());
+  assert.equal("long" in rules.shapes, false);
+  assert.equal("triangle" in rules.shapes, false);
+  for (const shape of ["oblong", "rectangle", "pear", "invTriangle"] as const) {
+    assert.match(JSON.stringify(rules.shapes[shape]), /e\.l\.f\./);
+  }
+});
+
+test("an unknown primary uses the oval chart", () => {
+  const oval = contourIds("oval").slice().sort();
+  const unknown = buildPlan({
+    ...base,
+    classification: { primary: "nope" as FaceShape, secondary: "oval", confidence: 0, margins: {} },
+  })[0]!.zoneIds.slice().sort();
+  assert.deepEqual(unknown, oval);
+});
+
+function contourIds(shape: FaceShape): string[] {
+  return buildPlan({
+    ...base,
+    classification: { primary: shape, secondary: "oval", confidence: 0.8, margins: {} },
+  })[0]!.zoneIds;
+}
+
+test("oblong, rectangle, pear, and invTriangle do not fall through to oval", () => {
+  const oval = contourIds("oval").slice().sort();
+  assert.deepEqual(contourIds("oblong").slice().sort(), ["hairline_top", "under_chin"]);
+  assert.deepEqual(contourIds("rectangle").slice().sort(), ["hairline_top", "under_chin"]);
+  assert.deepEqual(contourIds("pear").slice().sort(), ["jaw_L", "jaw_R"]);
+  for (const shape of ["oblong", "rectangle", "pear"] as const) {
+    assert.notDeepEqual(contourIds(shape).slice().sort(), oval, `${shape} used the oval contour`);
+  }
+  const inv = contourIds("invTriangle");
+  assert.ok(inv.includes("temple_L") && inv.includes("temple_R"), inv.join(","));
+  assert.equal(inv.includes("jaw_L"), false);
+  const invLight = buildPlan({
+    ...base,
+    classification: { primary: "invTriangle", secondary: "oval", confidence: 0.8, margins: {} },
+  }).find((s) => s.verb === "brighten")!;
+  assert.ok(invLight.zoneIds.includes("chin_ball"));
+  const ovalLight = buildPlan(base).find((s) => s.verb === "brighten")!;
+  assert.equal(ovalLight.zoneIds.includes("chin_ball"), false);
+  for (const shape of ["oblong", "rectangle"] as const) {
+    const plan = buildPlan({
+      ...base,
+      classification: { primary: shape, secondary: "oval", confidence: 0.8, margins: {} },
+    });
+    assert.match(plan[0]!.oneSentence, /horizontal/);
+    const light = plan.find((s) => s.verb === "brighten")!;
+    assert.deepEqual(light.zoneIds, ["cheek_apple"]);
+    assert.equal(light.zoneIds.includes("chin_ball"), false);
   }
 });
 
@@ -112,7 +173,7 @@ test("depth derives from skin luminance like the server when not handed one", ()
   const planA = buildPlan({ ...base, skinHex: "#7d523a", depth: deep });
   const planB = buildPlan({ ...base, skinHex: "#7d523a", depth: deep });
   assert.equal(planA[0]!.shadeHex, planB[0]!.shadeHex);
-  // plan[0] is the contour step (schema 2): its shade is the contour mix
+  // plan[0] is the contour step (schema 3): its shade is the contour mix
   assert.equal(planA[0]!.shadeHex, deriveShades("#7d523a", base.lockHex, deep).contour);
   // the blush shade is unchanged by the new step order
   const blushA = planA.find((s) => s.verb === "warm")!;

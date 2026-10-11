@@ -150,6 +150,8 @@ export interface FaceAnalysisRequest {
     browR?: [number, number][];
     cheekL?: [number, number][];
     cheekR?: [number, number][];
+    /** Coach-cascade face shape; drives contour placement. */
+    faceShape?: string;
   };
 }
 
