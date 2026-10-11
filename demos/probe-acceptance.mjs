@@ -371,15 +371,24 @@ async function main() {
 }
 
 function pixelDiff(a, b) {
-  // ffmpeg: mean + peak absolute difference on the shared gray plane.
+  // Per-channel RGB difference at native resolution. The old luma-plane
+  // blend (format=gray) collapsed CHROMATIC deltas — the shuffle variation
+  // shifts hue/saturation, whose gray-luma read is ~half the channel delta
+  // (measured: peak 13 gray vs 28 RGB on the same pair) — which flapped the
+  // B4 gate around its threshold run to run.
   const o = spawnSync("ffmpeg", [
     "-i", a, "-i", b,
-    "-filter_complex", "[0:v][1:v]blend=all_mode=difference,format=gray,signalstats,metadata=print:file=-",
-    "-f", "null", "-",
-  ], { encoding: "utf8" });
-  const yavg = Number(o.stdout?.match(/YAVG=([0-9.]+)/)?.[1] ?? -1);
-  const ymax = Number(o.stdout?.match(/YMAX=([0-9.]+)/)?.[1] ?? -1);
-  return { mean: yavg / 255, peak: ymax }; // normalized mean, 0..255 peak
+    "-filter_complex", "[0:v][1:v]blend=all_mode=difference,format=rgb24",
+    "-f", "rawvideo", "-pix_fmt", "rgb24", "-",
+  ], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 });
+  const buf = o.stdout ?? Buffer.alloc(0);
+  let peak = 0, sum = 0;
+  for (let i = 0; i < buf.length; i++) {
+    const d = buf[i];
+    sum += d;
+    if (d > peak) peak = d;
+  }
+  return { mean: buf.length ? sum / buf.length / 255 : 0, peak };
 }
 
 async function luminanceOfPng(path) {
