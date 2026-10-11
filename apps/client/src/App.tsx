@@ -114,8 +114,11 @@ export default function App() {
   useEffect(() => { if (lock) setLockAccent(lock.onFaceHex); }, [lock]);
 
   useEffect(() => {
-    if (!session) api.createSession().then(setSession).catch(() => undefined);
-  }, [session]);
+    // Session is only needed by the looks flow; the live coach stage is
+    // fully local. Creating it lazily here (not on mount) keeps the coach
+    // screen free of API noise when the server is not running.
+    if (!session && stage !== "coach") api.createSession().then(setSession).catch(() => undefined);
+  }, [session, stage]);
 
   // POST /face once a lock exists (idempotent per photo server-side).
   useEffect(() => {
@@ -980,7 +983,7 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
             {state ? <>Your read: <b>{shapeWord}</b></> : "Reading your face…"}
           </p>
           <p className="coach-live-hint">
-            {state?.layer === "highlight" ? "Light lands on the high points" : "Shade follows the lines of your shape"}
+            {state?.how ?? (state?.layer === "highlight" ? "Light lands on the high points" : "Shade follows the lines of your shape")}
           </p>
           <div className="coach-live-actions">
             <button

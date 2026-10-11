@@ -45,6 +45,12 @@ export interface Ribbon {
   /** Max half-width at the center of the stroke, IOD units. */
   widthMaxIod: number;
   kind: "ribbon";
+  /**
+   * The ordered brush path (start -> end), resampled to RIBBON_SAMPLES.
+   * The live coach animates along this; brush direction is craft, not
+   * decoration.
+   */
+  centerline?: Pt[];
 }
 
 export type ZoneOrRibbon = Zone | Ribbon;
@@ -187,8 +193,10 @@ export function buildContourMap(face: NormalizedFace): ContourMap {
   const ribbons: Ribbon[] = [];
 
   const pushZone = (id: ZoneId, poly: Pt[], radiusIod: number) => zones.push({ id, poly, radiusIod, kind: "zone" });
-  const pushRibbon = (id: RibbonId, centerline: Pt[], widthMaxIod: number) =>
-    ribbons.push({ id, poly: ribbonPolygon(centerline, widthMaxIod, iod), widthMaxIod, kind: "ribbon" });
+  const pushRibbon = (id: RibbonId, centerline: Pt[], widthMaxIod: number) => {
+    const line = centerline.length >= 3 ? smoothArc(centerline, RIBBON_SAMPLES) : centerline.slice(0, RIBBON_SAMPLES);
+    ribbons.push({ id, poly: ribbonPolygon(centerline, widthMaxIod, iod), widthMaxIod, kind: "ribbon", centerline: line });
+  };
 
   // ---- zones (5.1) ----
   // cheek_apple: radial gaussian at 205/425, radius ~0.18 CW. CW is read
