@@ -13,7 +13,8 @@ import { warmDecode } from "./lib/warmDecode";
 import { buildPlan } from "./lib/coach/plan.ts";
 import { depthOf } from "./lib/coach/shades.ts";
 import { CoachOverlay } from "./components/coachOverlay";
-import { startLiveContour, type LiveContourState } from "./lib/liveContour.ts";
+import { startLiveContour, buildLesson, type LiveContourState, type LessonStep } from "./lib/liveContour.ts";
+import type { SweepState } from "./lib/faceSweep.ts";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
@@ -935,6 +936,23 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [state, setState] = useState<LiveContourState | null>(null);
   const handleRef = useRef<import("./lib/liveContour.ts").LiveContourHandle | null>(null);
+  const [guideIdx, setGuideIdx] = useState<number | null>(null);
+  const [sweeping, setSweeping] = useState(false);
+  const sweepingRef = useRef(false);
+  sweepingRef.current = sweeping;
+  const [sweepState, setSweepState] = useState<SweepState | null>(null);
+  const [sweepDone, setSweepDone] = useState(false);
+  const lesson = useMemo(() => (state ? buildLesson(state.shape) : []), [state?.shape]);
+  const guided = guideIdx !== null && lesson.length > 0;
+  const step: LessonStep | null = guided ? lesson[Math.min(guideIdx, lesson.length - 1)]! : null;
+
+  const startGuide = () => { setGuideIdx(0); };
+  const advanceGuide = () => {
+    if (guideIdx === null) return;
+    if (guideIdx + 1 >= lesson.length) { handleRef.current?.setGuide(null); setGuideIdx(null); }
+    else { handleRef.current?.setGuide(lesson[guideIdx + 1]!); setGuideIdx(guideIdx + 1); }
+  };
+  useEffect(() => { if (step) handleRef.current?.setGuide(step); }, [guideIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     void cam.start();
@@ -952,7 +970,11 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
       if (stopped) return;
       if (v.readyState >= 2) {
         clearInterval(t);
-        handleRef.current = startLiveContour(v, c, "models/face_landmarker.task", (s) => { if (!cancelled) setState(s); });
+        handleRef.current = startLiveContour(
+          v, c, "models/face_landmarker.task",
+          (s) => { if (!cancelled) setState(s); },
+          (st) => { if (!cancelled && sweepingRef.current) setSweepState(st); },
+        );
         stop = () => handleRef.current?.stop();
       }
     }, 250);
@@ -985,6 +1007,55 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
           <p className="coach-live-hint">
             {state?.how ?? (state?.layer === "highlight" ? "Light lands on the high points" : "Shade follows the lines of your shape")}
           </p>
+          {!guided && !sweeping && (
+            <div className="coach-cta-row">
+              <button className="btn btn-primary coach-teach" onClick={startGuide}>
+                Teach me · {lesson.length} steps
+              </button>
+              <button className="btn btn-ghost" onClick={() => { const st = handleRef.current?.startSweep(); setSweeping(true); setSweepDone(false); setSweepState(st ?? null); }}>
+                {sweepDone ? "Re-calibrate 3D" : "Calibrate 3D"}
+              </button>
+            </div>
+          )}
+          {sweeping && (
+            <div className="lesson-card sweep-card" role="region" aria-label="3D calibration">
+              <p className="lesson-count">Turn your head slowly — left, right, up, down</p>
+              <p className="lesson-instruction">
+                {sweepState ? `${sweepState.viewCount} views` : "starting…"}
+                {" · "}
+                {sweepState ? [
+                  sweepState.covered.left && "left",
+                  sweepState.covered.right && "right",
+                  sweepState.covered.up && "up",
+                  sweepState.covered.down && "down",
+                  sweepState.covered.center && "front",
+                ].filter(Boolean).join(" · ") || "turn to begin" : ""}
+              </p>
+              <div className="lesson-actions">
+                <button className="btn btn-ghost" onClick={() => { handleRef.current?.finishSweep(); setSweeping(false); }}>Stop</button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => { const sw = handleRef.current?.finishSweep(); setSweeping(false); setSweepDone(!!sw && sw.viewCount >= 4); }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+          {guided && step && (
+            <div className="lesson-card" role="region" aria-label="Makeup step">
+              <p className="lesson-count">Step {guideIdx + 1} of {lesson.length} · {step.title}</p>
+              <p className="lesson-instruction">{step.instruction}</p>
+              <p className="lesson-tool">{step.tool}</p>
+              <div className="lesson-actions">
+                <button className="btn btn-ghost" onClick={() => { handleRef.current?.setGuide(null); setGuideIdx(null); }}>Stop</button>
+                <button className="btn btn-primary" onClick={advanceGuide}>
+                  {guideIdx + 1 >= lesson.length ? "Done" : "Next"}
+                </button>
+              </div>
+            </div>
+          )}
+          {!guided && (
           <div className="coach-live-actions" role="group" aria-label="Layers in order">
             {([
               ["contour", "1 Shade"],
@@ -1002,6 +1073,7 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
             ))}
             <button className="mini-chip" onClick={onExit}>Looks demo</button>
           </div>
+          )}
         </div>
       )}
     </section>

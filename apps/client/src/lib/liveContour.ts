@@ -21,6 +21,7 @@ import { classifyFace, FACE_SHAPES, type FaceShape } from "./coach/faceShape.ts"
 import { buildContourMap, type ContourMap, type RibbonId } from "./coach/zones.ts";
 import type { CoachPoint } from "./coach/measure.ts";
 import { rules } from "./coach/plan.ts";
+import { createSweepCollector, classifyFromSweep, type FaceSweep, type SweepState } from "./faceSweep.ts";
 
 type FaceLandmarker = import("@mediapipe/tasks-vision").FaceLandmarker;
 
@@ -43,7 +44,7 @@ export function loadVideoLandmarker(modelUrl: string): Promise<FaceLandmarker | 
             runningMode: "VIDEO",
             numFaces: 1,
             outputFaceBlendshapes: false,
-            outputFacialTransformationMatrixes: false,
+            outputFacialTransformationMatrixes: true,
           });
         } finally {
           console.error = origError;
@@ -80,6 +81,81 @@ export function highlightZonesForShape(shape: string): string[] {
 }
 
 export type CoachLayer = "contour" | "blush" | "highlight";
+
+/* ---------- guided lesson: one stroke at a time, in MUA order ---------- */
+
+export interface LessonStep {
+  layer: CoachLayer;
+  /** Card title, e.g. "Shade · temples". */
+  title: string;
+  /** The instruction she follows, from the cited chart data. */
+  instruction: string;
+  /** Product/tool line (wikiHow technique guidance, see comment). */
+  tool: string;
+  ribbonIds?: string[];
+  zoneBaseIds?: string[];
+}
+
+const RIBBON_NAME: Record<string, string> = {
+  temple_L: "temples", temple_R: "temples",
+  jaw_L: "jawline", jaw_R: "jawline",
+  cheek_shelf_L: "under the cheekbones", cheek_shelf_R: "under the cheekbones",
+  cheek_tip_L: "the cheekbone tips", cheek_tip_R: "the cheekbone tips",
+  under_chin: "under the chin", hairline_top: "the hairline",
+};
+
+const TOOL_LINES = {
+  // Technique lines from the wikiHow MUA guides: powder blush = fluffy brush,
+  // sweeping back-and-forth, never circular; cream = fingertip, tap to blend;
+  // highlighter = small dabs, layers build; contour = angled brush, light hand.
+  contour: "Contour shade on an angled brush - light hand, blend as you go.",
+  blush: "Fluffy brush for powder (sweep, never circle) or a fingertip tap for cream.",
+  highlight: "A small brush or fingertip - little dabs, build up in layers.",
+};
+
+const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+
+/** The ordered lesson for a shape: each shade region, then blush, then light. */
+export function buildLesson(shape: string): LessonStep[] {
+  const key = (FACE_SHAPES as readonly string[]).includes(shape) ? (shape as FaceShape) : "oval";
+  const spec = rules.shapes[key];
+  const steps: LessonStep[] = [];
+  const ribbons = (spec?.contour?.ribbons ?? []) as string[];
+  const seen = new Set<string>();
+  for (const id of ribbons) {
+    const base = id.replace(/_(L|R)$/, "");
+    if (seen.has(base)) continue;
+    seen.add(base);
+    const dir = rules.brushDirections[id];
+    steps.push({
+      layer: "contour",
+      title: `Shade · ${RIBBON_NAME[id] ?? base}`,
+      instruction: dir ? `${cap(dir)}.` : "Follow the moving shade.",
+      tool: TOOL_LINES.contour,
+      ribbonIds: ribbons.filter((r) => r.replace(/_(L|R)$/, "") === base),
+    });
+  }
+  const blush = spec?.blush as Record<string, unknown> | undefined;
+  if (blush?.note) {
+    steps.push({
+      layer: "blush",
+      title: "Blush · the cheeks",
+      instruction: cap(String(blush.note)).replace(/\.$/, "") + ".",
+      tool: TOOL_LINES.blush,
+    });
+  }
+  const hi = (spec?.highlight?.zones ?? []) as string[];
+  if (hi.length) {
+    steps.push({
+      layer: "highlight",
+      title: "Light · the high points",
+      instruction: "Tap the light where the glow lands - it blooms in order.",
+      tool: TOOL_LINES.highlight,
+      zoneBaseIds: hi,
+    });
+  }
+  return steps;
+}
 
 export interface LiveContourState {
   /** Face shape label from the coach cascade ("oval" default). */
@@ -126,6 +202,14 @@ export function howToText(shape: string, layer: CoachLayer): string {
 export interface LiveContourHandle {
   stop: () => void;
   setLayer: (l: CoachLayer) => void;
+  /** Focus the overlay on one lesson step (null = free explore). */
+  setGuide: (step: LessonStep | null) => void;
+  /** Start a calibration sweep (user turns head; feed() runs per frame). */
+  startSweep: () => SweepState;
+  /** Finish the sweep; returns the fused 3D model (null if too few views). */
+  finishSweep: () => FaceSweep | null;
+  /** The fused model, if a sweep completed. */
+  getSweep: () => FaceSweep | null;
 }
 
 export function startLiveContour(
@@ -133,6 +217,7 @@ export function startLiveContour(
   canvas: HTMLCanvasElement,
   modelUrl: string,
   onState?: (s: LiveContourState) => void,
+  onSweepProgress?: (s: SweepState) => void,
 ): LiveContourHandle {
   let stopped = false;
   let lastVideoTime = -1;
@@ -143,6 +228,39 @@ export function startLiveContour(
   let layer: CoachLayer = "contour";
 
   const setLayer = (l: CoachLayer) => { layer = l; onState?.({ shape, layer, how: howToText(shape, layer) }); };
+  let guide: LessonStep | null = null;
+  let sweepCollector: ReturnType<typeof createSweepCollector> | null = null;
+  let sweep: FaceSweep | null = null;
+  const setGuide = (step: LessonStep | null) => {
+    guide = step;
+    if (step) { layer = step.layer; onState?.({ shape, layer, how: step.instruction }); }
+  };
+  const startSweep = () => {
+    sweepCollector = createSweepCollector();
+    sweep = null;
+    return sweepCollector.state;
+  };
+  const finishSweep = () => {
+    if (!sweepCollector) return null;
+    sweep = sweepCollector.finish();
+    sweepCollector = null;
+    if (sweep) {
+      // Re-classify from the fused 3D model — multi-view beats any single
+      // frame, and the yaw gate no longer applies (we HAVE the views).
+      const cls = classifyFromSweep(sweep);
+      if (cls && FACE_SHAPES.includes(cls.primary as never)) {
+        if (cls.primary !== shape) {
+          shape = cls.primary;
+        }
+        onState?.({
+          shape,
+          layer,
+          how: `${howToText(shape, layer)} (${sweep.viewCount} views fused)`,
+        });
+      }
+    }
+    return sweep;
+  };
   // Handle returned immediately; stop() is a no-op until the loop starts.
 
   void loadVideoLandmarker(modelUrl).then((lm) => {
@@ -166,10 +284,18 @@ export function startLiveContour(
       if (v.currentTime !== lastVideoTime) {
         lastVideoTime = v.currentTime;
         let face: Array<{ x: number; y: number }> | undefined;
+        let matrix: Float32Array | undefined;
         try {
-          face = lm.detectForVideo(v, now)?.faceLandmarks?.[0];
+          const res = lm.detectForVideo(v, now);
+          face = res?.faceLandmarks?.[0];
+          const m = res?.facialTransformationMatrixes?.[0];
+          if (m && m.data && m.data.length === 16) matrix = new Float32Array(m.data);
         } catch {
           face = undefined;
+        }
+        if (sweepCollector && face && matrix) {
+          const st = sweepCollector.feed(face.map((p) => ({ x: p.x, y: p.y, z: (p as { z?: number }).z ?? 0 })), matrix);
+          onSweepProgress?.(st);
         }
         if (face && face.length >= 468) {
           const pts = face as CoachPoint[];
@@ -199,193 +325,145 @@ export function startLiveContour(
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (!cm) return;
       const W = canvas.width, H = canvas.height;
-      const lw = Math.max(2.5, W * 0.005);
-      // Shared animation clock: one stroke-cycle ~1.8s, phase-shifted per
-      // ribbon so the strokes read sequentially, not as one blinking blob.
-      const t = (performance.now() % 1800) / 1800;
+      // Airbrush only (2026-10-11: no SAW face). No polygons, no outlines,
+      // no markers: soft radial product whose motion IS the instruction.
+      // All painting happens on one offscreen color layer, composited once
+      // per frame with globalCompositeOperation so shade multiplies and
+      // light screens - like real product on skin.
+      // Guided mode: slow, single-step, with a hold at the end of each
+      // sweep so she can follow with her own brush.
+      const cycle = guide ? 3200 : 1800;
+      const t = (performance.now() % cycle) / cycle;
 
-      const drawArrow = (from: { x: number; y: number }, to: { x: number; y: number }, headLen: number) => {
-        const a = Math.atan2(to.y - from.y, to.x - from.x);
+      const paint = (x: number, y: number, r: number, color: [number, number, number], a: number) => {
+        const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+        const [cr, cg, cb] = color;
+        g.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
+        g.addColorStop(0.6, `rgba(${cr},${cg},${cb},${(a * 0.45).toFixed(3)})`);
+        g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+        ctx.fillStyle = g;
         ctx.beginPath();
-        ctx.moveTo(to.x, to.y);
-        ctx.lineTo(to.x - headLen * Math.cos(a - Math.PI / 6), to.y - headLen * Math.sin(a - Math.PI / 6));
-        ctx.lineTo(to.x - headLen * Math.cos(a + Math.PI / 6), to.y - headLen * Math.sin(a + Math.PI / 6));
-        ctx.closePath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
       };
+      // The stroke: a trail of puffs along the path, the leading edge
+      // slightly stronger - reads as product being laid down, moving.
+      const paintStroke = (
+        path: Array<{ x: number; y: number }>,
+        color: [number, number, number],
+        baseA: number,
+        radius: number,
+        progress: number,
+      ) => {
+        const n = path.length;
+        if (n < 2) return;
+        const upto = Math.max(2, Math.ceil(n * progress));
+        for (let i = 0; i < upto; i++) {
+          const p = path[i]!;
+          const lead = 1 - (upto - 1 - i) / n; // 0..1 toward the head
+          const a = baseA * (0.4 + 0.6 * lead) * (0.5 + 0.5 * Math.sin(Math.PI * ((i + 1) / upto)));
+          paint(p.x * W, p.y * H, radius, color, Math.min(0.5, a));
+        }
+      };
+      const samplePath = (line: Array<{ x: number; y: number }>, steps: number) => {
+        const out: Array<{ x: number; y: number }> = [];
+        for (let k = 0; k < steps; k++) {
+          const f = (k / (steps - 1)) * (line.length - 1);
+          const i0 = Math.floor(f);
+          const i1 = Math.min(line.length - 1, i0 + 1);
+          const u = f - i0;
+          const a = line[i0]!, b = line[i1]!; // eslint-disable-line @typescript-eslint/no-unused-vars
+          out.push({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u });
+        }
+        return out;
+      };
+
+      const SHADE: [number, number, number] = [122, 74, 44];   // cool brown shadow
+      const BLUSH: [number, number, number] = [212, 96, 102];  // rose
+      const LIGHT: [number, number, number] = [255, 238, 210]; // warm glow
 
       if (layer === "contour") {
-        const ids = contourRibbonsForShape(shape);
-        ids.forEach((id, idx) => {
+        const allIds = contourRibbonsForShape(shape);
+        const ids = guide?.ribbonIds ?? allIds;
+        allIds.filter((id) => ids.includes(id)).forEach((id, idx) => {
           const r = cm!.ribbons.find((x) => x.id === id);
           if (!r) return;
-          // Soft region: WHERE.
-          ctx.beginPath();
-          for (let i = 0; i < r.poly.length; i++) {
-            const p = r.poly[i]!;
-            if (i === 0) ctx.moveTo(p.x * W, p.y * H);
-            else ctx.lineTo(p.x * W, p.y * H);
-          }
-          ctx.closePath();
-          ctx.fillStyle = "rgba(140, 82, 46, 0.30)";
-          ctx.fill();
-          ctx.strokeStyle = "rgba(214, 158, 110, 0.75)";
-          ctx.lineWidth = lw;
-          ctx.stroke();
-
           const line = r.centerline ?? [];
           if (line.length >= 2) {
             const phase = (idx * 0.31) % 1;
-            const tt = (t + phase) % 1;
-            const f = tt * (line.length - 1);
-            const i0 = Math.floor(f);
-            const i1 = Math.min(line.length - 1, i0 + 1);
-            const u = f - i0;
-            const a = line[i0]!, b = line[i1]!;
-            const pos = { x: (a.x + (b.x - a.x) * u) * W, y: (a.y + (b.y - a.y) * u) * H };
-            const prev = i0 > 0 ? line[i0 - 1]! : a;
-            const headLen = Math.max(14, W * 0.05);
-            // HOW: an animated dot sweeping the brush path, trailing an
-            // arrowhead in the stroke direction, plus a start marker.
-            const start = line[0]!;
-            ctx.beginPath();
-            ctx.arc(start.x * W, start.y * H, Math.max(6, W * 0.014), 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(255, 224, 178, 0.95)";
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, Math.max(9, W * 0.020), 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(255, 240, 214, 0.95)";
-            ctx.fill();
-            ctx.strokeStyle = "rgba(180, 90, 40, 0.95)";
-            ctx.lineWidth = lw * 0.8;
-            ctx.stroke();
-            drawArrow(prev, pos, headLen);
+            let tt = (t + phase) % 1;
+            if (guide) tt = Math.min(1, tt / 0.8); // sweep 80%, hold 20%
+            for (const p of samplePath(line, 22)) paint(p.x * W, p.y * H, W * 0.045, SHADE, 0.10);
+            paintStroke(samplePath(line, 22), SHADE, 0.30, W * 0.052, tt);
           }
         });
       } else if (layer === "blush") {
-        // Blush layer (step 2): the color bridge between shade and light.
-        // Motion per the wikiHow MUA placements: path sweep (heart C,
-        // round high-apple-to-temple, oblong bone-to-ear), orbit on the
-        // apples (square), or a two-segment V (pear).
         const motion = blushMotionForShape(shape);
         for (const side of ["_L", "_R"] as const) {
+          if (guide) { /* blush lesson step shows both sides in sequence */ }
           const apple = cm!.zones.find((z) => z.id === "cheek_apple" + side);
           if (!apple) continue;
-          // Blush region: the apple zone, swept toward the temple at the
-          // chart's angle - drawn as the apple polygon plus a soft trail
-          // from the anchor toward the motion's end point.
-          ctx.beginPath();
-          for (let i = 0; i < apple.poly.length; i++) {
-            const q = apple.poly[i]!;
-            if (i === 0) ctx.moveTo(q.x * W, q.y * H);
-            else ctx.lineTo(q.x * W, q.y * H);
-          }
-          ctx.closePath();
-          ctx.fillStyle = "rgba(214, 106, 111, 0.30)";
-          ctx.fill();
-          ctx.strokeStyle = "rgba(235, 150, 150, 0.85)";
-          ctx.lineWidth = lw;
-          ctx.stroke();
-
-          // Anchor resolution on the live mesh (indices from zones.ts):
-          const P = (id: string): { x: number; y: number } => {
-            const at2 = (i: number): { x: number; y: number } => meshPts.get(i) ?? { x: 0.5, y: 0.5 };
-            switch (id) {
+          let sx = 0, sy = 0;
+          for (const q of apple.poly) { sx += q.x; sy += q.y; }
+          const c = { x: sx / apple.poly.length, y: sy / apple.poly.length };
+          const at2 = (i: number): { x: number; y: number } => meshPts.get(i) ?? c;
+          const P = (idn: string): { x: number; y: number } => {
+            switch (idn) {
               case "temple": return at2(side === "_L" ? 67 : 297);
               case "cheek_bone": return at2(side === "_L" ? 116 : 345);
               case "cheek_bone_high": return at2(side === "_L" ? 230 : 450);
-              case "apple": case "apple_high": {
-                let sx = 0, sy = 0;
-                for (const q of apple.poly) { sx += q.x; sy += q.y; }
-                const c = { x: sx / apple.poly.length, y: sy / apple.poly.length };
-                return id === "apple_high" ? { x: c.x, y: c.y - 0.02 } : c;
-              }
+              case "apple": return c;
+              case "apple_high": return { x: c.x, y: c.y - 0.025 };
               case "ear": case "ear_lobe": return at2(side === "_L" ? 234 : 454);
               case "brow_inner": return at2(side === "_L" ? 107 : 336);
-              default: return { x: 0.5, y: 0.5 };
+              default: return c;
             }
           };
-
-          const from = P(motion?.from ?? "apple");
-          const to = P(motion?.to ?? "temple");
           const phase = side === "_L" ? 0 : 0.5;
           const tt = (t + phase) % 1;
           if (motion?.kind === "orbit") {
-            // Square: circular on the apples - a dot orbiting the zone.
-            const c = P("apple");
-            let sx = 0, sy = 0;
-            for (const q of apple.poly) { sx += q.x; sy += q.y; }
-            const rr = Math.hypot(sx / apple.poly.length - c.x, sy / apple.poly.length - c.y) * 0.7;
-            const a = tt * Math.PI * 2;
-            const pos = { x: (c.x + Math.cos(a) * rr) * W, y: (c.y + Math.sin(a) * rr) * H };
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, Math.max(9, W * 0.02), 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(250, 190, 190, 0.95)";
-            ctx.fill();
-            ctx.strokeStyle = "rgba(190, 70, 80, 0.95)";
-            ctx.lineWidth = lw * 0.8;
-            ctx.stroke();
+            // Square: soft blush laid in circles on the apples.
+            const rr = 0.035;
+            for (let k = 0; k < 26; k++) {
+              const a = (k / 26) * Math.PI * 2;
+              const px = c.x + Math.cos(a) * rr * 0.7;
+              const py = c.y + Math.sin(a) * rr * 0.5;
+              const done = tt > (k / 26) ? 0.32 : 0.10;
+              paint(px * W, py * H, W * 0.05, BLUSH, done);
+            }
           } else if (motion?.kind === "vpath") {
-            // Pear: two segments - cheekbone->temple, then cheekbone->brow.
+            // Pear: V = bone->temple, then bone->brow.
             const seg = tt < 0.5 ? 0 : 1;
             const u = seg === 0 ? tt * 2 : (tt - 0.5) * 2;
-            const a = seg === 0 ? P("cheek_bone") : P("cheek_bone");
-            const b = seg === 0 ? P("temple") : P("brow_inner");
-            const pos = { x: (a.x + (b.x - a.x) * u) * W, y: (a.y + (b.y - a.y) * u) * H };
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, Math.max(9, W * 0.02), 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(250, 190, 190, 0.95)";
-            ctx.fill();
-            ctx.strokeStyle = "rgba(190, 70, 80, 0.95)";
-            ctx.lineWidth = lw * 0.8;
-            ctx.stroke();
-            drawArrow({ x: a.x * W, y: a.y * H }, pos, Math.max(14, W * 0.05));
+            const a0 = P("cheek_bone");
+            const b0 = seg === 0 ? P("temple") : P("brow_inner");
+            const base = samplePath([a0, { x: (a0.x + P("temple").x) / 2, y: (a0.y + P("temple").y) / 2 }, P("temple")], 16);
+            for (const p of base) paint(p.x * W, p.y * H, W * 0.05, BLUSH, 0.10);
+            paintStroke(samplePath([a0, b0], 16), BLUSH, 0.30, W * 0.055, u);
           } else {
-            // Path sweep with pressure note (heart: soft->more).
-            const pos = { x: (from.x + (to.x - from.x) * tt) * W, y: (from.y + (to.y - from.y) * tt) * H };
-            ctx.beginPath();
-            ctx.arc(pos.x, pos.y, Math.max(9, W * 0.02) * (motion?.pressure ? 0.8 + 0.5 * tt : 1), 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(250, 190, 190, 0.95)";
-            ctx.fill();
-            ctx.strokeStyle = "rgba(190, 70, 80, 0.95)";
-            ctx.lineWidth = lw * 0.8;
-            ctx.stroke();
-            drawArrow({ x: from.x * W, y: from.y * H }, pos, Math.max(14, W * 0.05));
-            ctx.beginPath();
-            ctx.arc(from.x * W, from.y * H, Math.max(6, W * 0.014), 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(255, 224, 178, 0.95)";
-            ctx.fill();
+            const from = P(motion?.from ?? "apple");
+            const to = P(motion?.to ?? "temple");
+            const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 - 0.012 };
+            const path = samplePath([from, mid, to], 20);
+            for (const p of path) paint(p.x * W, p.y * H, W * 0.05, BLUSH, 0.09);
+            // Pressure grows toward the cheekbone (heart): scale trail alpha
+            // along the sweep instead of dot size.
+            const grow = motion?.pressure ? 1.25 : 1;
+            paintStroke(path, BLUSH, 0.30 * grow, W * 0.055, tt);
           }
         }
       } else {
-        // Light layer: zones glow where highlight lands, each pulsing in
-        // sequence; a small dot marks the anchor to tap first.
+        // Light: a soft glow bloom on each high point, blooming in order.
         const ids = highlightZonesForShape(shape);
-        cm.zones.forEach((z, idx) => {
-          const base = z.id.replace(/_(L|R)$/, "");
-          if (!ids.includes(base) && !ids.includes(z.id)) return;
+        cm!.zones.forEach((z, idx) => {
+          const baseId = z.id.replace(/_(L|R)$/, "");
+          if (!ids.includes(baseId) && !ids.includes(z.id)) return;
+          let sx = 0, sy = 0;
+          for (const q of z.poly) { sx += q.x; sy += q.y; }
           const phase = (idx * 0.22) % 1;
           const tt = (t + phase) % 1;
-          const pulse = 0.24 + 0.14 * Math.sin(tt * Math.PI);
-          ctx.beginPath();
-          for (let i = 0; i < z.poly.length; i++) {
-            const p = z.poly[i]!;
-            if (i === 0) ctx.moveTo(p.x * W, p.y * H);
-            else ctx.lineTo(p.x * W, p.y * H);
-          }
-          ctx.closePath();
-          ctx.fillStyle = `rgba(255, 240, 214, ${pulse.toFixed(3)})`;
-          ctx.fill();
-          ctx.strokeStyle = "rgba(255, 224, 178, 0.85)";
-          ctx.lineWidth = lw;
-          ctx.stroke();
-          let sx = 0, sy = 0;
-          for (const p of z.poly) { sx += p.x; sy += p.y; }
-          sx = (sx / z.poly.length) * W; sy = (sy / z.poly.length) * H;
-          ctx.beginPath();
-          ctx.arc(sx, sy, Math.max(5, W * 0.011), 0, Math.PI * 2);
-          ctx.fillStyle = "rgba(255, 250, 235, 0.95)";
-          ctx.fill();
+          const bloom = 0.5 - 0.5 * Math.cos(tt * Math.PI * 2); // smooth 0..1..0
+          paint((sx / z.poly.length) * W, (sy / z.poly.length) * H, W * (0.055 + 0.02 * bloom), LIGHT, 0.16 + 0.12 * bloom);
         });
       }
     };
@@ -395,6 +473,10 @@ export function startLiveContour(
   return {
     stop: () => { stopped = true; },
     setLayer,
+    setGuide,
+    startSweep,
+    finishSweep,
+    getSweep: () => sweep,
   };
 }
 

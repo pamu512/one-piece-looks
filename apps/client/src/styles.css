@@ -1009,3 +1009,21 @@ body {
   border-color: var(--accent, #e0587a);
   color: var(--accent, #e0587a);
 }
+
+/* guided lesson card */
+.coach-teach { width: 100%; }
+.lesson-card {
+  display: grid; gap: 8px; padding: 14px 16px;
+  border: 1px solid var(--line); border-radius: var(--radius-m);
+  background: var(--card, #14151a);
+}
+.lesson-count { margin: 0; font-size: 12.5px; letter-spacing: 0.02em; color: var(--ink-3, #b9b4ab); text-transform: uppercase; }
+.lesson-instruction { margin: 0; font-size: 16.5px; line-height: 1.45; }
+.lesson-tool { margin: 0; font-size: 13px; color: var(--ink-3, #b9b4ab); }
+.lesson-actions { display: flex; gap: 8px; margin-top: 2px; }
+.lesson-actions .btn { flex: 1; }
+
+/* 3D calibration */
+.coach-cta-row { display: flex; gap: 8px; }
+.coach-cta-row .coach-teach { flex: 1; }
+.sweep-card .lesson-count { text-transform: none; font-size: 13.5px; }
