@@ -22,8 +22,10 @@ import { buildContourMap, type ContourMap, type RibbonId } from "./coach/zones.t
 import type { CoachPoint } from "./coach/measure.ts";
 import { rules } from "./coach/plan.ts";
 import { createSweepCollector, classifyFromSweep, type FaceSweep, type SweepState } from "./faceSweep.ts";
+import { gradeZone, gridInPoly, ringAroundPoly, type RGB, type StepKind, type GradeSample } from "./applicationGrade.ts";
 
 type FaceLandmarker = import("@mediapipe/tasks-vision").FaceLandmarker;
+type Pt2 = { x: number; y: number };
 
 let videoLandmarkerPromise: Promise<FaceLandmarker | null> | null = null;
 
@@ -210,6 +212,10 @@ export interface LiveContourHandle {
   finishSweep: () => FaceSweep | null;
   /** The fused model, if a sweep completed. */
   getSweep: () => FaceSweep | null;
+  /** Baseline the current step's zones for grading (call at step start). */
+  beginGrading: () => void;
+  /** Re-grade now against the baseline; returns per-zone + aggregate. */
+  gradeNow: () => { feedback: string; score: number; coverage: number } | null;
 }
 
 export function startLiveContour(
@@ -231,9 +237,72 @@ export function startLiveContour(
   let guide: LessonStep | null = null;
   let sweepCollector: ReturnType<typeof createSweepCollector> | null = null;
   let sweep: FaceSweep | null = null;
+
+  // ---- application grading ----
+  // Samples come from the RAW VIDEO frame (not the overlay canvas — the
+  // grey teaching layer must not pollute its own measurements).
+  let gradeBaseline: { poly: Pt2[]; inside: RGB[]; ring: RGB[]; kind: StepKind }[] | null = null;
+  const rawCtx = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+  const sampleAt = (pts: Array<{ x: number; y: number }>): RGB[] => {
+    if (!rawCtx || video.videoWidth === 0) return [];
+    if (rawCtx.canvas.width !== video.videoWidth) {
+      rawCtx.canvas.width = video.videoWidth;
+      rawCtx.canvas.height = video.videoHeight;
+    }
+    rawCtx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+    const out: RGB[] = [];
+    for (const p of pts) {
+      const d = rawCtx.getImageData(Math.min(video.videoWidth - 1, Math.max(0, Math.round(p.x * video.videoWidth))), Math.min(video.videoHeight - 1, Math.max(0, Math.round(p.y * video.videoHeight))), 1, 1).data;
+      out.push([d[0]!, d[1]!, d[2]!]);
+    }
+    return out;
+  };
+  const gradeTargets = (): { poly: Pt2[]; kind: StepKind }[] => {
+    const layerKind: StepKind = layer === "contour" ? "contour" : layer === "blush" ? "blush" : "highlight";
+    if (!cm) return [];
+    if (layer === "contour") {
+      const ids = guide?.ribbonIds ?? contourRibbonsForShape(shape);
+      return cm.ribbons.filter((r) => ids.includes(r.id as RibbonId)).map((r) => ({ poly: r.poly as Pt2[], kind: layerKind }));
+    }
+    if (layer === "blush") {
+      return cm.zones.filter((z) => z.id.startsWith("cheek_apple")).map((z) => ({ poly: z.poly as Pt2[], kind: layerKind }));
+    }
+    const ids = highlightZonesForShape(shape);
+    return cm.zones.filter((z) => {
+      const base = z.id.replace(/_(L|R)$/, "");
+      return ids.includes(base) || ids.includes(z.id);
+    }).map((z) => ({ poly: z.poly as Pt2[], kind: layerKind }));
+  };
+  const beginGrading = () => {
+    gradeBaseline = null;
+    const targets = gradeTargets();
+    if (!targets.length) return;
+    gradeBaseline = targets.map((t) => ({
+      poly: t.poly,
+      kind: t.kind,
+      inside: sampleAt(gridInPoly(t.poly)),
+      ring: sampleAt(ringAroundPoly(t.poly)),
+    }));
+  };
+  const gradeNow = () => {
+    if (!gradeBaseline) return null;
+    const results: GradeSample[] = [];
+    for (const b of gradeBaseline) {
+      const cur = sampleAt(gridInPoly(b.poly));
+      const curRing = sampleAt(ringAroundPoly(b.poly));
+      if (!cur.length) continue;
+      results.push(gradeZone({ kind: b.kind, poly: b.poly, baselineInside: b.inside, currentInside: cur, baselineRing: b.ring, currentRing: curRing }));
+    }
+    if (!results.length) return null;
+    const score = results.reduce((a, r) => a + r.score, 0) / results.length;
+    const coverage = results.reduce((a, r) => a + r.coverage, 0) / results.length;
+    // worst-first feedback: the zone that needs her attention most
+    const worst = [...results].sort((a, b2) => a.score - b2.score)[0]!;
+    return { feedback: worst.feedback, score, coverage };
+  };
   const setGuide = (step: LessonStep | null) => {
     guide = step;
-    if (step) { layer = step.layer; onState?.({ shape, layer, how: step.instruction }); }
+    if (step) { layer = step.layer; onState?.({ shape, layer, how: step.instruction }); beginGrading(); }
   };
   const startSweep = () => {
     sweepCollector = createSweepCollector();
@@ -378,9 +447,27 @@ export function startLiveContour(
         return out;
       };
 
-      const SHADE: [number, number, number] = [122, 74, 44];   // cool brown shadow
-      const BLUSH: [number, number, number] = [212, 96, 102];  // rose
-      const LIGHT: [number, number, number] = [255, 238, 210]; // warm glow
+      // ONE neutral teaching grey (2026-10-11): color overlays competed
+      // with the product she is applying AND polluted the grader's camera
+      // samples. Grey directs; her makeup is the only color on screen.
+      const GREY: [number, number, number] = [180, 184, 192];
+      // Side occlusion: when the head turns, only the visible side's zones
+      // mean anything on screen - the far side projects to garbage coords.
+      // Visible if the point's x (mirror-space) is on the TURNED-TOWARD
+      // side of the face's own midline.
+      const sideVisible = (p: { x: number; y: number }): boolean => {
+        const mid = meshPts.get(4)?.x ?? 0.5; // nose tip = face midline
+        const yawSign = (meshPts.get(4)?.x ?? 0.5) < (meshPts.get(234)!.x + meshPts.get(454)!.x) / 2 ? 1 : -1;
+        // facing left (her left): points with x > mid are the near side, etc.
+        return yawSign * (p.x - mid) >= -0.02;
+      };
+      const bothFrontal = Math.abs(faceMidYaw()) < 10;
+      function faceMidYaw(): number {
+        // crude yaw proxy: nose-tip x offset from ear midpoint, in iod units
+        const nose = meshPts.get(4), eL = meshPts.get(234), eR = meshPts.get(454);
+        if (!nose || !eL || !eR) return 0;
+        return ((nose.x - (eL.x + eR.x) / 2) / Math.hypot(eR.x - eL.x, eR.y - eL.y)) * 60;
+      }
 
       if (layer === "contour") {
         const allIds = contourRibbonsForShape(shape);
@@ -388,21 +475,26 @@ export function startLiveContour(
         allIds.filter((id) => ids.includes(id)).forEach((id, idx) => {
           const r = cm!.ribbons.find((x) => x.id === id);
           if (!r) return;
-          const line = r.centerline ?? [];
+          const line = (r.centerline ?? []).filter(bothFrontal ? () => true : sideVisible);
           if (line.length >= 2) {
             const phase = (idx * 0.31) % 1;
             let tt = (t + phase) % 1;
             if (guide) tt = Math.min(1, tt / 0.8); // sweep 80%, hold 20%
-            for (const p of samplePath(line, 22)) paint(p.x * W, p.y * H, W * 0.045, SHADE, 0.10);
-            paintStroke(samplePath(line, 22), SHADE, 0.30, W * 0.052, tt);
+            for (const p of samplePath(line, 22)) paint(p.x * W, p.y * H, W * 0.045, GREY, 0.08);
+            paintStroke(samplePath(line, 22), GREY, 0.22, W * 0.052, tt);
           }
         });
       } else if (layer === "blush") {
         const motion = blushMotionForShape(shape);
         for (const side of ["_L", "_R"] as const) {
-          if (guide) { /* blush lesson step shows both sides in sequence */ }
           const apple = cm!.zones.find((z) => z.id === "cheek_apple" + side);
           if (!apple) continue;
+          // side occlusion: hide the far cheek when the head is turned
+          if (!bothFrontal) {
+            let sx0 = 0, sy0 = 0;
+            for (const q of apple.poly) { sx0 += q.x; sy0 += q.y; }
+            if (!sideVisible({ x: sx0 / apple.poly.length, y: sy0 / apple.poly.length })) continue;
+          }
           let sx = 0, sy = 0;
           for (const q of apple.poly) { sx += q.x; sy += q.y; }
           const c = { x: sx / apple.poly.length, y: sy / apple.poly.length };
@@ -429,7 +521,7 @@ export function startLiveContour(
               const px = c.x + Math.cos(a) * rr * 0.7;
               const py = c.y + Math.sin(a) * rr * 0.5;
               const done = tt > (k / 26) ? 0.32 : 0.10;
-              paint(px * W, py * H, W * 0.05, BLUSH, done);
+              paint(px * W, py * H, W * 0.05, GREY, done);
             }
           } else if (motion?.kind === "vpath") {
             // Pear: V = bone->temple, then bone->brow.
@@ -438,18 +530,18 @@ export function startLiveContour(
             const a0 = P("cheek_bone");
             const b0 = seg === 0 ? P("temple") : P("brow_inner");
             const base = samplePath([a0, { x: (a0.x + P("temple").x) / 2, y: (a0.y + P("temple").y) / 2 }, P("temple")], 16);
-            for (const p of base) paint(p.x * W, p.y * H, W * 0.05, BLUSH, 0.10);
-            paintStroke(samplePath([a0, b0], 16), BLUSH, 0.30, W * 0.055, u);
+            for (const p of base) paint(p.x * W, p.y * H, W * 0.05, GREY, 0.08);
+            paintStroke(samplePath([a0, b0], 16), GREY, 0.22, W * 0.055, u);
           } else {
             const from = P(motion?.from ?? "apple");
             const to = P(motion?.to ?? "temple");
             const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 - 0.012 };
             const path = samplePath([from, mid, to], 20);
-            for (const p of path) paint(p.x * W, p.y * H, W * 0.05, BLUSH, 0.09);
+            for (const p of path) paint(p.x * W, p.y * H, W * 0.05, GREY, 0.08);
             // Pressure grows toward the cheekbone (heart): scale trail alpha
             // along the sweep instead of dot size.
             const grow = motion?.pressure ? 1.25 : 1;
-            paintStroke(path, BLUSH, 0.30 * grow, W * 0.055, tt);
+            paintStroke(path, GREY, 0.22 * grow, W * 0.055, tt);
           }
         }
       } else {
@@ -463,7 +555,7 @@ export function startLiveContour(
           const phase = (idx * 0.22) % 1;
           const tt = (t + phase) % 1;
           const bloom = 0.5 - 0.5 * Math.cos(tt * Math.PI * 2); // smooth 0..1..0
-          paint((sx / z.poly.length) * W, (sy / z.poly.length) * H, W * (0.055 + 0.02 * bloom), LIGHT, 0.16 + 0.12 * bloom);
+          paint((sx / z.poly.length) * W, (sy / z.poly.length) * H, W * (0.055 + 0.02 * bloom), GREY, 0.10 + 0.14 * bloom);
         });
       }
     };
@@ -477,6 +569,8 @@ export function startLiveContour(
     startSweep,
     finishSweep,
     getSweep: () => sweep,
+    beginGrading,
+    gradeNow,
   };
 }
 

@@ -946,6 +946,16 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
   const guided = guideIdx !== null && lesson.length > 0;
   const step: LessonStep | null = guided ? lesson[Math.min(guideIdx, lesson.length - 1)]! : null;
 
+  const [grade, setGrade] = useState<{ feedback: string; score: number; coverage: number } | null>(null);
+  useEffect(() => {
+    if (!guided) { setGrade(null); return; }
+    const iv = setInterval(() => {
+      const g = handleRef.current?.gradeNow?.();
+      if (g) setGrade(g);
+    }, 1200);
+    return () => clearInterval(iv);
+  }, [guided, guideIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const startGuide = () => { setGuideIdx(0); };
   const advanceGuide = () => {
     if (guideIdx === null) return;
@@ -1047,6 +1057,14 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
               <p className="lesson-count">Step {guideIdx + 1} of {lesson.length} · {step.title}</p>
               <p className="lesson-instruction">{step.instruction}</p>
               <p className="lesson-tool">{step.tool}</p>
+              {grade && (
+                <div className="lesson-grade" role="status">
+                  <div className="grade-bar" aria-hidden>
+                    <div className="grade-fill" style={{ width: `${Math.round(grade.score * 100)}%` }} />
+                  </div>
+                  <span className={grade.score >= 0.85 ? "grade-word good" : "grade-word"}>{grade.feedback}</span>
+                </div>
+              )}
               <div className="lesson-actions">
                 <button className="btn btn-ghost" onClick={() => { handleRef.current?.setGuide(null); setGuideIdx(null); }}>Stop</button>
                 <button className="btn btn-primary" onClick={advanceGuide}>
