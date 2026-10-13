@@ -12,7 +12,10 @@
  *
  * Classification: the coach cascade (measure + faceShape) runs on the
  * latest frame at ~1 Hz (it is cheap; the mesh itself runs every frame).
- * The yaw gate refuses non-frontal poses — overlay hidden, no wrong map.
+ * The published label changes only after three identical samples, so a
+ * borderline still cannot flicker oval ↔ pear. A tracking gap clears
+ * that run. The yaw gate refuses non-frontal poses — overlay hidden,
+ * no wrong map.
  */
 
 import { loadVision } from "./faceMesh.ts";
@@ -159,6 +162,72 @@ export function buildLesson(shape: string): LessonStep[] {
   return steps;
 }
 
+/** Consecutive samples of one label that is not the published shape yet. */
+export interface ShapeStreak {
+  pending: string;
+  count: number;
+}
+
+export function freshShapeStreak(): ShapeStreak {
+  return { pending: "", count: 0 };
+}
+
+/** Identical 1s readings required before a new face shape is published. */
+export const SHAPE_HOLD_SAMPLES = 3;
+
+/**
+ * Publish `candidate` only after SHAPE_HOLD_SAMPLES identical readings
+ * that differ from `prev`. A reading of `prev`, or a different label,
+ * starts the count over. `null` or `""` is a missed sample (no mesh
+ * measure): it does not vote and does not clear a run. Does not mutate
+ * `streak`.
+ */
+export function holdShape(
+  prev: string,
+  candidate: string | null,
+  streak: ShapeStreak,
+): { shape: string; streak: ShapeStreak } {
+  if (candidate == null || candidate === "") return { shape: prev, streak };
+  if (candidate === prev) {
+    if (streak.count === 0 && streak.pending === "") return { shape: prev, streak };
+    return { shape: prev, streak: freshShapeStreak() };
+  }
+  const count = streak.pending === candidate && Number.isInteger(streak.count) && streak.count > 0
+    ? streak.count + 1
+    : 1;
+  if (count >= SHAPE_HOLD_SAMPLES) {
+    return { shape: candidate, streak: freshShapeStreak() };
+  }
+  return { shape: prev, streak: { pending: candidate, count } };
+}
+
+/**
+ * Zero the hold when the mesh appears or disappears.
+ * A stable presence keeps the same streak object.
+ */
+export function syncShapeStreak(
+  streak: ShapeStreak,
+  facePresent: boolean,
+  seen: boolean,
+): { streak: ShapeStreak; facePresent: boolean } {
+  if (seen === facePresent) return { streak, facePresent };
+  return { streak: freshShapeStreak(), facePresent: seen };
+}
+
+/**
+ * Lesson list for Teach me / Step i of N.
+ * `locked` is the snapshot taken when Teach me starts. It wins over a
+ * later live shape, including a finishSweep reclassify, until Stop or Done
+ * passes null.
+ */
+export function resolveGuideLesson(
+  locked: readonly LessonStep[] | null,
+  liveShape: string | null | undefined,
+): LessonStep[] {
+  if (locked) return locked.slice();
+  return liveShape ? buildLesson(liveShape) : [];
+}
+
 export interface LiveContourState {
   /** Face shape label from the coach cascade ("oval" default). */
   shape: string;
@@ -228,6 +297,8 @@ export function startLiveContour(
   let stopped = false;
   let lastVideoTime = -1;
   let shape = "oval";
+  let shapeStreak = freshShapeStreak();
+  let facePresent = false;
   let lastClassifyMs = 0;
   let cm: ContourMap | null = null;
   const meshPts = new Map<number, { x: number; y: number }>();
@@ -313,20 +384,27 @@ export function startLiveContour(
     if (!sweepCollector) return null;
     sweep = sweepCollector.finish();
     sweepCollector = null;
-    if (sweep) {
+    // Turning the head ends the 1s run. Drop it even when fusion is short
+    // or cannot classify, so the next frontal frame cannot finish a
+    // pre-sweep flip.
+    shapeStreak = freshShapeStreak();
+    if (!sweep) return null;
+    try {
       // Re-classify from the fused 3D model — multi-view beats any single
       // frame, and the yaw gate no longer applies (we HAVE the views).
       const cls = classifyFromSweep(sweep);
-      if (cls && FACE_SHAPES.includes(cls.primary as never)) {
-        if (cls.primary !== shape) {
-          shape = cls.primary;
-        }
-        onState?.({
-          shape,
-          layer,
-          how: `${howToText(shape, layer)} (${sweep.viewCount} views fused)`,
-        });
-      }
+      const primary = cls?.primary ?? "";
+      if (!(FACE_SHAPES as readonly string[]).includes(primary)) return sweep;
+      if (primary !== shape) shape = primary;
+      onState?.({
+        shape,
+        layer,
+        how: guide
+          ? guide.instruction
+          : `${howToText(shape, layer)} (${sweep.viewCount} views fused)`,
+      });
+    } catch {
+      /* keep the last published shape; the streak is already clear */
     }
     return sweep;
   };
@@ -370,16 +448,27 @@ export function startLiveContour(
           const pts = face as CoachPoint[];
           meshPts.clear();
           for (let i = 0; i < pts.length; i++) meshPts.set(i, { x: pts[i]!.x, y: pts[i]!.y });
+          const synced = syncShapeStreak(shapeStreak, facePresent, true);
+          shapeStreak = synced.streak;
+          facePresent = synced.facePresent;
           if (now - lastClassifyMs > 1000) {
             lastClassifyMs = now;
             try {
               const m = measureFace(pts);
-              const next = m ? classifyFace(m).primary : "oval";
-              if (next !== shape) {
-                shape = next;
-                onState?.({ shape, layer, how: howToText(shape, layer) });
+              // A failed measure is not an oval vote. classifyFace(null)
+              // would say oval at confidence 0 and clear a real run.
+              const next = m ? classifyFace(m).primary : null;
+              const held = holdShape(shape, next, shapeStreak);
+              shapeStreak = held.streak;
+              if (held.shape !== shape) {
+                shape = held.shape;
+                onState?.({
+                  shape,
+                  layer,
+                  how: guide ? guide.instruction : howToText(shape, layer),
+                });
               }
-            } catch { /* keep last shape */ }
+            } catch { /* keep last shape and the current run */ }
           }
           try {
             cm = buildContourMap(buildNormalizedRaw(pts));
@@ -387,6 +476,9 @@ export function startLiveContour(
             cm = null;
           }
         } else {
+          const synced = syncShapeStreak(shapeStreak, facePresent, false);
+          shapeStreak = synced.streak;
+          facePresent = synced.facePresent;
           cm = null;
         }
       }

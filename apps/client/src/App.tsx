@@ -13,7 +13,7 @@ import { warmDecode } from "./lib/warmDecode";
 import { buildPlan } from "./lib/coach/plan.ts";
 import { depthOf } from "./lib/coach/shades.ts";
 import { CoachOverlay } from "./components/coachOverlay";
-import { startLiveContour, buildLesson, type LiveContourState, type LessonStep } from "./lib/liveContour.ts";
+import { startLiveContour, resolveGuideLesson, type LiveContourState, type LessonStep } from "./lib/liveContour.ts";
 import type { SweepState } from "./lib/faceSweep.ts";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
@@ -937,12 +937,18 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
   const [state, setState] = useState<LiveContourState | null>(null);
   const handleRef = useRef<import("./lib/liveContour.ts").LiveContourHandle | null>(null);
   const [guideIdx, setGuideIdx] = useState<number | null>(null);
+  // List the Teach me button showed. Stop and Done clear it. A later
+  // shape — 1s samples or finishSweep — does not.
+  const [guideLesson, setGuideLesson] = useState<LessonStep[] | null>(null);
   const [sweeping, setSweeping] = useState(false);
   const sweepingRef = useRef(false);
   sweepingRef.current = sweeping;
   const [sweepState, setSweepState] = useState<SweepState | null>(null);
   const [sweepDone, setSweepDone] = useState(false);
-  const lesson = useMemo(() => (state ? buildLesson(state.shape) : []), [state?.shape]);
+  const lesson = useMemo(
+    () => resolveGuideLesson(guideLesson, state?.shape),
+    [guideLesson, state?.shape],
+  );
   const guided = guideIdx !== null && lesson.length > 0;
   const step: LessonStep | null = guided ? lesson[Math.min(guideIdx, lesson.length - 1)]! : null;
 
@@ -956,10 +962,19 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
     return () => clearInterval(iv);
   }, [guided, guideIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startGuide = () => { setGuideIdx(0); };
+  const endGuide = () => {
+    handleRef.current?.setGuide(null);
+    setGuideIdx(null);
+    setGuideLesson(null);
+  };
+  const startGuide = () => {
+    if (!lesson.length) return;
+    setGuideLesson(lesson.slice());
+    setGuideIdx(0);
+  };
   const advanceGuide = () => {
     if (guideIdx === null) return;
-    if (guideIdx + 1 >= lesson.length) { handleRef.current?.setGuide(null); setGuideIdx(null); }
+    if (guideIdx + 1 >= lesson.length) endGuide();
     else { handleRef.current?.setGuide(lesson[guideIdx + 1]!); setGuideIdx(guideIdx + 1); }
   };
   useEffect(() => { if (step) handleRef.current?.setGuide(step); }, [guideIdx]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1066,7 +1081,7 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
                 </div>
               )}
               <div className="lesson-actions">
-                <button className="btn btn-ghost" onClick={() => { handleRef.current?.setGuide(null); setGuideIdx(null); }}>Stop</button>
+                <button className="btn btn-ghost" onClick={endGuide}>Stop</button>
                 <button className="btn btn-primary" onClick={advanceGuide}>
                   {guideIdx + 1 >= lesson.length ? "Done" : "Next"}
                 </button>
