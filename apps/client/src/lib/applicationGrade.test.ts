@@ -43,13 +43,13 @@ test("deltaMetric signs per kind", () => {
 
 const flat = (n: number, c: RGB): RGB[] => Array.from({ length: n }, () => c);
 
-test("gradeZone: empty -> not yet; full -> that's it", () => {
+test("gradeZone: empty skin waits; full -> that's it", () => {
   const inside = gridInPoly(square, 8);
   const ring = ringAroundPoly(square, 8, 0.05);
   const skin: RGB = [150, 120, 110];
   // nothing applied
   const none = gradeZone({ kind: "blush", poly: square, baselineInside: flat(inside.length, skin), currentInside: flat(inside.length, skin), baselineRing: flat(ring.length, skin), currentRing: flat(ring.length, skin) });
-  assert.match(none.feedback, /not yet/);
+  assert.equal(none.feedback, "Watch the path, then paint along it");
   assert.equal(none.coverage, 0);
   // fully applied blush inside, clean ring
   const blushC: RGB = [200, 110, 110];
@@ -57,6 +57,50 @@ test("gradeZone: empty -> not yet; full -> that's it", () => {
   assert.equal(full.coverage, 1);
   assert.ok(full.score > 0.8, `score ${full.score}`);
   assert.match(full.feedback, /that's it/);
+});
+
+test("gradeZone: paint outside an empty zone still waits", () => {
+  const inside = gridInPoly(square, 8);
+  const ring = ringAroundPoly(square, 8, 0.05);
+  const skin: RGB = [150, 120, 110];
+  const blushC: RGB = [205, 105, 105];
+  const g = gradeZone({
+    kind: "blush",
+    poly: square,
+    baselineInside: flat(inside.length, skin),
+    currentInside: flat(inside.length, skin),
+    baselineRing: flat(ring.length, skin),
+    currentRing: flat(ring.length, blushC),
+  });
+  assert.equal(g.coverage, 0);
+  assert.ok(g.overflow > 0.5, `overflow ${g.overflow}`);
+  assert.equal(g.feedback, "Watch the path, then paint along it");
+});
+
+test("gradeZone: a thin coat is still not yet", () => {
+  const poly: Pt[] = [
+    { x: 0.15, y: 0.15 },
+    { x: 0.85, y: 0.15 },
+    { x: 0.85, y: 0.85 },
+    { x: 0.15, y: 0.85 },
+  ];
+  const inside = gridInPoly(poly);
+  const ring = ringAroundPoly(poly);
+  const skin: RGB = [150, 120, 110];
+  const blushC: RGB = [200, 110, 110];
+  assert.ok(inside.length >= 8, `need enough samples, got ${inside.length}`);
+  const current = flat(inside.length, skin);
+  current[0] = blushC;
+  const g = gradeZone({
+    kind: "blush",
+    poly,
+    baselineInside: flat(inside.length, skin),
+    currentInside: current,
+    baselineRing: flat(ring.length, skin),
+    currentRing: flat(ring.length, skin),
+  });
+  assert.ok(g.coverage > 0 && g.coverage < 0.2, `coverage ${g.coverage}`);
+  assert.match(g.feedback, /not yet/);
 });
 
 test("gradeZone: overflow detected", () => {

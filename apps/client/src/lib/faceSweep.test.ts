@@ -5,6 +5,10 @@ import {
   invertRigid,
   applyMat,
   poseAngles,
+  sweepMarks,
+  sweepProgress,
+  SWEEP_DONE_LINE,
+  SWEEP_FUSED_LINE,
   type Mat4,
 } from "./faceSweep.ts";
 
@@ -103,4 +107,48 @@ test("finish with too few views returns null", () => {
   const pts = fakeLandmarks();
   c.feed(pts, rigid(0, 0));
   assert.equal(c.finish(), null);
+});
+
+test("five sweep marks follow covered flags; copy keeps the four-view rule", () => {
+  assert.equal(SWEEP_DONE_LINE, "Done needs four distinct views");
+  assert.equal(SWEEP_FUSED_LINE, "The fused model keeps your zones steady after you turn.");
+  const none = sweepMarks();
+  assert.deepEqual(none.map((m) => m.id), ["left", "right", "up", "down", "front"]);
+  assert.deepEqual(none.map((m) => m.on), [false, false, false, false, false]);
+
+  const pts = fakeLandmarks();
+  const oneEach: Array<[number, number, number]> = [
+    [25, 0, 0],
+    [-25, 0, 1],
+    [0, 15, 2],
+    [0, -15, 3],
+    [0, 0, 4],
+  ];
+  for (const [yaw, pitch, idx] of oneEach) {
+    const col = createSweepCollector();
+    col.feed(pts, rigid(yaw, pitch));
+    const marks = sweepMarks(col.state.covered);
+    assert.equal(marks.length, 5);
+    marks.forEach((m, i) => assert.equal(m.on, i === idx, `${m.id} at yaw ${yaw} pitch ${pitch}`));
+    assert.equal(col.finish(), null);
+  }
+
+  const col = createSweepCollector();
+  const live = col.feed(pts, rigid(0, 0));
+  const held = sweepProgress(null, live);
+  assert.notEqual(held, live);
+  assert.equal(sweepProgress(held, live), held);
+  assert.equal(held.viewCount, 1);
+  assert.deepEqual(held.covered, { left: false, right: false, up: false, down: false, center: true });
+  col.feed(pts, rigid(25, 0));
+  assert.equal(live.viewCount, 2);
+  assert.equal(live.covered.left, true);
+  assert.equal(held.viewCount, 1, "held copy must not follow later feed()");
+  assert.equal(held.covered.left, false);
+  const moved = sweepProgress(held, live);
+  assert.equal(moved.viewCount, 2);
+  assert.deepEqual(moved.covered, { left: true, right: false, up: false, down: false, center: true });
+  assert.notEqual(moved, held);
+  assert.equal(sweepProgress(moved, live), moved);
+  assert.equal(col.finish(), null);
 });

@@ -157,7 +157,8 @@ export function gradeZone(z: ZoneGradeInput): GradeSample {
   score = Math.max(0, Math.min(1, score));
 
   let feedback: string;
-  if (coverage < 0.2) feedback = "not yet — follow the sweep";
+  if (coverage === 0) feedback = "Watch the path, then paint along it";
+  else if (coverage < 0.2) feedback = "not yet — follow the sweep";
   else if (overflow > 0.5) feedback = "lighter hand — stay inside the glow";
   else if (coverage >= 0.85) feedback = "that's it — blended right";
   else {

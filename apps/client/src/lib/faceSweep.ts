@@ -87,6 +87,55 @@ export interface SweepState {
   covered: { left: boolean; right: boolean; up: boolean; down: boolean; center: boolean };
 }
 
+export interface SweepMark {
+  id: "left" | "right" | "up" | "down" | "front";
+  on: boolean;
+}
+
+export const SWEEP_DONE_LINE = "Done needs four distinct views";
+export const SWEEP_FUSED_LINE = "The fused model keeps your zones steady after you turn.";
+
+/**
+ * Five direction hints. Done still requires viewCount >= 4 inside finish();
+ * these marks do not gate it.
+ */
+export function sweepMarks(covered?: SweepState["covered"]): SweepMark[] {
+  const c = covered ?? { left: false, right: false, up: false, down: false, center: false };
+  return [
+    { id: "left", on: !!c.left },
+    { id: "right", on: !!c.right },
+    { id: "up", on: !!c.up },
+    { id: "down", on: !!c.down },
+    { id: "front", on: !!c.center },
+  ];
+}
+
+/**
+ * Value the sweep card can store. feed() returns the collector's own state
+ * and then mutates it; React skips setState on that same reference, so a
+ * held copy is the only way the marks move. Returns prev when nothing changed.
+ */
+export function sweepProgress(prev: SweepState | null, live: SweepState): SweepState {
+  const covered = {
+    left: !!live.covered.left,
+    right: !!live.covered.right,
+    up: !!live.covered.up,
+    down: !!live.covered.down,
+    center: !!live.covered.center,
+  };
+  if (
+    prev
+    && prev.phase === live.phase
+    && prev.viewCount === live.viewCount
+    && prev.covered.left === covered.left
+    && prev.covered.right === covered.right
+    && prev.covered.up === covered.up
+    && prev.covered.down === covered.down
+    && prev.covered.center === covered.center
+  ) return prev;
+  return { phase: live.phase, viewCount: live.viewCount, covered };
+}
+
 /**
  * Create a sweep collector. Call feed() every frame with the landmarker
  * result. finish() returns the fused model. The collector keeps at most

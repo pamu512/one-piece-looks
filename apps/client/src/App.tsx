@@ -14,7 +14,7 @@ import { buildPlan } from "./lib/coach/plan.ts";
 import { depthOf } from "./lib/coach/shades.ts";
 import { CoachOverlay } from "./components/coachOverlay";
 import { startLiveContour, resolveGuideLesson, type LiveContourState, type LessonStep } from "./lib/liveContour.ts";
-import type { SweepState } from "./lib/faceSweep.ts";
+import { sweepMarks, sweepProgress, SWEEP_DONE_LINE, SWEEP_FUSED_LINE, type SweepState } from "./lib/faceSweep.ts";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
@@ -998,7 +998,7 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
         handleRef.current = startLiveContour(
           v, c, "models/face_landmarker.task",
           (s) => { if (!cancelled) setState(s); },
-          (st) => { if (!cancelled && sweepingRef.current) setSweepState(st); },
+          (st) => { if (!cancelled && sweepingRef.current) setSweepState((prev) => sweepProgress(prev, st)); },
         );
         stop = () => handleRef.current?.stop();
       }
@@ -1037,7 +1037,7 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
               <button className="btn btn-primary coach-teach" onClick={startGuide}>
                 Teach me · {lesson.length} steps
               </button>
-              <button className="btn btn-ghost" onClick={() => { const st = handleRef.current?.startSweep(); setSweeping(true); setSweepDone(false); setSweepState(st ?? null); }}>
+              <button className="btn btn-ghost" onClick={() => { const st = handleRef.current?.startSweep(); setSweeping(true); setSweepDone(false); setSweepState(st ? sweepProgress(null, st) : null); }}>
                 {sweepDone ? "Re-calibrate 3D" : "Calibrate 3D"}
               </button>
             </div>
@@ -1047,15 +1047,20 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
               <p className="lesson-count">Turn your head slowly — left, right, up, down</p>
               <p className="lesson-instruction">
                 {sweepState ? `${sweepState.viewCount} views` : "starting…"}
-                {" · "}
-                {sweepState ? [
-                  sweepState.covered.left && "left",
-                  sweepState.covered.right && "right",
-                  sweepState.covered.up && "up",
-                  sweepState.covered.down && "down",
-                  sweepState.covered.center && "front",
-                ].filter(Boolean).join(" · ") || "turn to begin" : ""}
               </p>
+              <ul className="sweep-marks" aria-label="Sweep directions">
+                {sweepMarks(sweepState?.covered).map((m) => (
+                  <li
+                    key={m.id}
+                    className={m.on ? "on" : undefined}
+                    aria-label={`${m.id}, ${m.on ? "seen" : "needed"}`}
+                  >
+                    {m.id}
+                  </li>
+                ))}
+              </ul>
+              <p className="sweep-note">{SWEEP_DONE_LINE}</p>
+              <p className="sweep-note">{SWEEP_FUSED_LINE}</p>
               <div className="lesson-actions">
                 <button className="btn btn-ghost" onClick={() => { handleRef.current?.finishSweep(); setSweeping(false); }}>Stop</button>
                 <button
