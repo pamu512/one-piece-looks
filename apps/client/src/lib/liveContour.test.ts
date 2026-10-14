@@ -1,10 +1,26 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  GHOST_ALPHA,
+  GHOST_RADIUS,
+  GHOST_SAMPLES,
+  STROKE_ALPHA,
+  STROKE_HEAD_CAP,
+  STROKE_RADIUS,
+  STROKE_SAMPLES,
+  TEACHING_GREY,
+  YAW_FRONTAL_DEG,
+  brushProgress,
   buildLesson,
+  contourRibbonsForShape,
+  faceYawDeg,
   freshShapeStreak,
   holdShape,
+  paintContourLayer,
+  paintRibbonIds,
   resolveGuideLesson,
+  ribbonVisible,
+  strokeAlphas,
   syncShapeStreak,
   type LessonStep,
   type ShapeStreak,
@@ -142,4 +158,287 @@ test("startGuide snapshot stays stable across a shape change and finishSweep", (
   assert.deepEqual(titles(resolveGuideLesson(null, "pear")), titles(pear));
   assert.equal(resolveGuideLesson(null, "pear").length, 3);
   assert.deepEqual(resolveGuideLesson(null, undefined), []);
+});
+
+test("locked guide ids survive a different live shape", () => {
+  const locked = contourRibbonsForShape("oblong");
+  const live = contourRibbonsForShape("oval");
+  assert.notDeepEqual([...locked], [...live]);
+  const painted = paintRibbonIds("oval", locked);
+  assert.equal(painted, locked);
+  for (const id of locked) assert.equal(live.includes(id), false);
+});
+
+test("null guide ids follow the live shape", () => {
+  assert.deepEqual([...paintRibbonIds("oval", null)], [...contourRibbonsForShape("oval")]);
+  assert.deepEqual([...paintRibbonIds("oblong", null)], [...contourRibbonsForShape("oblong")]);
+  assert.notDeepEqual([...paintRibbonIds("oval", null)], [...paintRibbonIds("oblong", null)]);
+});
+
+test("ghost alpha and radius stay below the stroke", () => {
+  assert.equal(GHOST_ALPHA, 0.04);
+  assert.equal(GHOST_RADIUS, 0.028);
+  assert.equal(GHOST_SAMPLES, 12);
+  assert.equal(STROKE_ALPHA, 0.22);
+  assert.equal(STROKE_RADIUS, 0.04);
+  assert.equal(STROKE_HEAD_CAP, 0.5);
+  assert.deepEqual(TEACHING_GREY, [180, 184, 192]);
+  assert.ok(GHOST_ALPHA < STROKE_ALPHA);
+  assert.ok(GHOST_RADIUS < STROKE_RADIUS);
+});
+
+test("guided progress is monotone and holds at 1 after 0.8", () => {
+  let prev = 0;
+  for (let i = 0; i <= 16; i++) {
+    const t = (i / 16) * 0.8;
+    const p = brushProgress(t, 0, true);
+    assert.ok(p >= prev && p >= 0 && p <= 1, `t ${t} -> ${p}`);
+    prev = p;
+  }
+  assert.equal(brushProgress(0, 0, true), 0);
+  assert.ok(Math.abs(brushProgress(0.4, 0, true) - 0.5) < 1e-9);
+  assert.equal(brushProgress(0.8, 0, true), 1);
+  assert.equal(brushProgress(0.91, 0, true), 1);
+  assert.equal(brushProgress(0.999, 0, true), 1);
+  assert.equal(brushProgress(0.25, 0.5, false), 0.75);
+  const wrapped = brushProgress(0.9, 0.3, false);
+  assert.ok(Math.abs(wrapped - 0.2) < 1e-9);
+  assert.ok(wrapped >= 0 && wrapped <= 1);
+});
+
+test("at progress 0.5 samples past the head are 0 and the head sample is the max", () => {
+  const alphas = strokeAlphas(8, 0.5);
+  assert.equal(alphas.length, 8);
+  assert.deepEqual(alphas.slice(4), [0, 0, 0, 0]);
+  const head = alphas[3]!;
+  assert.ok(head > 0);
+  assert.equal(head, Math.max(...alphas));
+  for (let i = 0; i < 3; i++) assert.ok(alphas[i]! < head);
+  assert.ok(alphas.every((a) => a <= STROKE_HEAD_CAP));
+  const full = strokeAlphas(8, 1);
+  assert.equal(full[7], Math.max(...full));
+  assert.ok(full.every((a) => a > 0));
+});
+
+test("|yaw| < 10 shows both sides", () => {
+  const noseX = 0.5;
+  for (const yaw of [0, 9, -9, YAW_FRONTAL_DEG - 0.001]) {
+    assert.ok(Math.abs(yaw) < YAW_FRONTAL_DEG);
+    assert.equal(ribbonVisible({ x: 0.12, y: 0.5 }, yaw, noseX), true);
+    assert.equal(ribbonVisible({ x: 0.88, y: 0.5 }, yaw, noseX), true);
+  }
+});
+
+test("a turned face hides the far centroid and keeps the near one", () => {
+  const earL = { x: 0.2, y: 0.4 };
+  const earR = { x: 0.6, y: 0.4 };
+  const noseRight = { x: 0.55, y: 0.5 };
+  const yawRight = faceYawDeg(noseRight, earL, earR);
+  assert.ok(Math.abs(yawRight - 22.5) < 1e-6);
+  assert.ok(Math.abs(yawRight) >= YAW_FRONTAL_DEG);
+  assert.equal(ribbonVisible({ x: 0.3, y: 0.55 }, yawRight, noseRight.x), true);
+  assert.equal(ribbonVisible({ x: 0.8, y: 0.55 }, yawRight, noseRight.x), false);
+  assert.equal(ribbonVisible({ x: noseRight.x + 0.01, y: 0.55 }, yawRight, noseRight.x), true);
+  assert.equal(ribbonVisible({ x: noseRight.x + 0.05, y: 0.55 }, yawRight, noseRight.x), false);
+
+  const noseLeft = { x: 0.25, y: 0.5 };
+  const yawLeft = faceYawDeg(noseLeft, earL, earR);
+  assert.ok(Math.abs(yawLeft + 22.5) < 1e-6);
+  assert.equal(ribbonVisible({ x: 0.55, y: 0.55 }, yawLeft, noseLeft.x), true);
+  assert.equal(ribbonVisible({ x: 0.05, y: 0.55 }, yawLeft, noseLeft.x), false);
+  assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, YAW_FRONTAL_DEG, 0.5), true);
+  assert.equal(ribbonVisible({ x: 0.9, y: 0.5 }, YAW_FRONTAL_DEG, 0.5), false);
+});
+
+test("missing ears yield yaw 0", () => {
+  const nose = { x: 0.5, y: 0.4 };
+  const ear = { x: 0.2, y: 0.4 };
+  const other = { x: 0.8, y: 0.45 };
+  assert.equal(faceYawDeg(nose, undefined, other), 0);
+  assert.equal(faceYawDeg(nose, ear, undefined), 0);
+  assert.equal(faceYawDeg(undefined, ear, other), 0);
+  assert.equal(faceYawDeg(null, null, null), 0);
+  assert.equal(faceYawDeg(nose, ear, { x: ear.x, y: ear.y }), 0);
+  assert.equal(faceYawDeg({ x: Number.NaN, y: 0.5 }, ear, other), 0);
+  assert.equal(faceYawDeg(nose, { x: 0.2, y: Number.POSITIVE_INFINITY }, other), 0);
+  assert.equal(
+    faceYawDeg({ x: 0.55, y: 0.5 }, { x: 0.2, y: 0.3 }, { x: 0.6, y: 0.5 }),
+    ((0.55 - (0.2 + 0.6) / 2) / Math.hypot(0.6 - 0.2, 0.5 - 0.3)) * 60,
+  );
+});
+
+test("a bad centroid stays hidden and a non-finite yaw does not occlude", () => {
+  assert.equal(ribbonVisible({ x: Number.NaN, y: 0.5 }, 0, 0.5), false);
+  assert.equal(ribbonVisible(null, 0, 0.5), false);
+  assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, Number.NaN, 0.5), true);
+  assert.equal(ribbonVisible({ x: 0.9, y: 0.5 }, Number.NaN, 0.5), true);
+  assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, 30, Number.NaN), false);
+});
+
+test("brush progress stays in range when the clock is not", () => {
+  assert.ok(Math.abs(brushProgress(Number.NaN, 0.2, false) - 0.2) < 1e-9);
+  assert.ok(Math.abs(brushProgress(-0.2, 0, false) - 0.8) < 1e-9);
+  assert.ok(Math.abs(brushProgress(1.2, 0, true) - brushProgress(0.2, 0, true)) < 1e-9);
+  const held = brushProgress(-1.3, 0.1, true);
+  assert.ok(held >= 0 && held <= 1);
+  assert.deepEqual(strokeAlphas(5, 0), [0, 0, 0, 0, 0]);
+  assert.deepEqual(strokeAlphas(0, 0.5), []);
+  assert.deepEqual(strokeAlphas(4, 2), strokeAlphas(4, 1));
+  assert.deepEqual(strokeAlphas(4, -1), strokeAlphas(4, 0));
+});
+
+function lineAt(x: number) {
+  return [
+    { x, y: 0.3 },
+    { x, y: 0.45 },
+    { x, y: 0.6 },
+    { x, y: 0.75 },
+  ];
+}
+
+function recordingCtx() {
+  const alphas: number[] = [];
+  const arcs: { x: number; y: number; r: number }[] = [];
+  let pending = Number.NaN;
+  return {
+    alphas,
+    arcs,
+    fillStyle: "",
+    createRadialGradient() {
+      return {
+        addColorStop(offset: number, color: string) {
+          if (offset !== 0) return;
+          const m = /rgba\(\d+,\d+,\d+,([^)]+)\)/.exec(color);
+          pending = m ? Number(m[1]) : Number.NaN;
+        },
+      };
+    },
+    beginPath() {},
+    arc(x: number, y: number, r: number) {
+      arcs.push({ x, y, r });
+    },
+    fill() {
+      alphas.push(pending);
+    },
+  };
+}
+
+test("a locked stroke paints through a shape change and a miss is skipped", () => {
+  const ctx = recordingCtx();
+  const W = 480;
+  paintContourLayer(ctx as never, {
+    width: W,
+    height: 640,
+    ribbons: [
+      { id: "hairline_top", centerline: lineAt(0.5) },
+      { id: "temple_L", centerline: lineAt(0.3) },
+    ] as never,
+    liveShape: "oval",
+    guideIds: ["hairline_top", "missing_id"],
+    yawDeg: 0,
+    noseX: 0.5,
+    cycleT: 0.4,
+    guided: true,
+  });
+  assert.ok(ctx.arcs.length > 0);
+  assert.ok(ctx.arcs.every((a) => a.x === 0.5 * W));
+  const ghost = ctx.arcs.filter((a) => Math.abs(a.r - W * GHOST_RADIUS) < 1e-9);
+  const stroke = ctx.arcs.filter((a) => Math.abs(a.r - W * STROKE_RADIUS) < 1e-9);
+  assert.equal(ghost.length, GHOST_SAMPLES);
+  assert.equal(ghost.length + stroke.length, ctx.arcs.length);
+  const expected = strokeAlphas(STROKE_SAMPLES, brushProgress(0.4, 0, true)).filter((a) => a > 0);
+  assert.equal(stroke.length, expected.length);
+  for (let i = 0; i < ghost.length; i++) assert.ok(Math.abs(ctx.alphas[i]! - GHOST_ALPHA) < 1e-9);
+  const painted = ctx.alphas.slice(ghost.length);
+  assert.equal(painted[painted.length - 1], Math.max(...painted));
+  for (let i = 0; i < expected.length; i++) assert.ok(Math.abs(painted[i]! - expected[i]!) < 1e-9);
+  assert.ok(GHOST_ALPHA < Math.min(...painted));
+  assert.ok(painted.every((a) => a <= STROKE_HEAD_CAP));
+});
+
+test("at progress 0 only the ghost paints", () => {
+  const ctx = recordingCtx();
+  paintContourLayer(ctx as never, {
+    width: 100,
+    height: 100,
+    ribbons: [{ id: "hairline_top", centerline: lineAt(0.5) }] as never,
+    liveShape: "oblong",
+    guideIds: ["hairline_top"],
+    yawDeg: 0,
+    noseX: 0.5,
+    cycleT: 0,
+    guided: true,
+  });
+  assert.equal(ctx.arcs.length, GHOST_SAMPLES);
+  assert.ok(ctx.alphas.every((a) => Math.abs(a - GHOST_ALPHA) < 1e-9));
+});
+
+test("null guide ids paint the live shape and a frontal frame paints both sides", () => {
+  const ctx = recordingCtx();
+  const W = 100;
+  paintContourLayer(ctx as never, {
+    width: W,
+    height: 100,
+    ribbons: [
+      { id: "temple_L", centerline: lineAt(0.3) },
+      { id: "temple_R", centerline: lineAt(0.7) },
+      { id: "hairline_top", centerline: lineAt(0.5) },
+    ] as never,
+    liveShape: "oval",
+    guideIds: null,
+    yawDeg: 9,
+    noseX: 0.5,
+    cycleT: 0,
+    guided: true,
+  });
+  const xs = new Set(ctx.arcs.map((a) => a.x));
+  assert.equal(xs.size, 2);
+  assert.ok(xs.has(0.3 * W));
+  assert.ok(xs.has(0.7 * W));
+  assert.equal(xs.has(0.5 * W), false);
+});
+
+test("a turned face skips the whole far ribbon, including its near points", () => {
+  const ctx = recordingCtx();
+  const W = 200;
+  paintContourLayer(ctx as never, {
+    width: W,
+    height: 200,
+    ribbons: [
+      {
+        id: "far",
+        centerline: [
+          { x: 0.4, y: 0.2 },
+          { x: 0.4, y: 0.4 },
+          { x: 0.9, y: 0.6 },
+          { x: 0.9, y: 0.8 },
+        ],
+      },
+      { id: "near", centerline: lineAt(0.2) },
+    ] as never,
+    liveShape: "oval",
+    guideIds: ["far", "near"],
+    yawDeg: 30,
+    noseX: 0.5,
+    cycleT: 0.2,
+    guided: false,
+  });
+  assert.ok(ctx.arcs.length > 0);
+  assert.ok(ctx.arcs.every((a) => Math.abs(a.x - 0.2 * W) < 1e-9));
+});
+
+test("a zero-size frame paints nothing", () => {
+  const ctx = recordingCtx();
+  paintContourLayer(ctx as never, {
+    width: 0,
+    height: 640,
+    ribbons: [{ id: "hairline_top", centerline: lineAt(0.5) }] as never,
+    liveShape: "oblong",
+    guideIds: null,
+    yawDeg: 0,
+    noseX: 0.5,
+    cycleT: 0.5,
+    guided: false,
+  });
+  assert.equal(ctx.arcs.length, 0);
 });

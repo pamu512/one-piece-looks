@@ -14,14 +14,14 @@
  * latest frame at ~1 Hz (it is cheap; the mesh itself runs every frame).
  * The published label changes only after three identical samples, so a
  * borderline still cannot flicker oval ↔ pear. A tracking gap clears
- * that run. The yaw gate refuses non-frontal poses — overlay hidden,
- * no wrong map.
+ * that run. A turned head keeps the last shape and paints only the
+ * near-side ribbons.
  */
 
 import { loadVision } from "./faceMesh.ts";
 import { measureFace } from "./coach/measure.ts";
 import { classifyFace, FACE_SHAPES, type FaceShape } from "./coach/faceShape.ts";
-import { buildContourMap, type ContourMap, type RibbonId } from "./coach/zones.ts";
+import { buildContourMap, type ContourMap, type Ribbon, type RibbonId } from "./coach/zones.ts";
 import type { CoachPoint } from "./coach/measure.ts";
 import { rules } from "./coach/plan.ts";
 import { createSweepCollector, classifyFromSweep, type FaceSweep, type SweepState } from "./faceSweep.ts";
@@ -212,6 +212,185 @@ export function syncShapeStreak(
 ): { streak: ShapeStreak; facePresent: boolean } {
   if (seen === facePresent) return { streak, facePresent };
   return { streak: freshShapeStreak(), facePresent: seen };
+}
+
+/** Teaching grey. Product color stays off this layer. */
+export const TEACHING_GREY: [number, number, number] = [180, 184, 192];
+
+/** Faint full path under the brush. Alpha and radius stay under the stroke. */
+export const GHOST_ALPHA = 0.04;
+export const GHOST_RADIUS = 0.028;
+export const GHOST_SAMPLES = 12;
+
+/** Moving brush. The head is the brightest sample and never passes the cap. */
+export const STROKE_ALPHA = 0.22;
+export const STROKE_RADIUS = 0.04;
+export const STROKE_HEAD_CAP = 0.5;
+export const STROKE_SAMPLES = 22;
+
+/** |yaw| under this paints both sides. */
+export const YAW_FRONTAL_DEG = 10;
+
+/** Guided brush reaches the end here, then holds through the rest of the 3200ms cycle. */
+const GUIDE_REACH = 0.8;
+
+const NEAR_SLACK = 0.02;
+
+/**
+ * Ribbon ids to paint. A locked lesson list is returned unchanged so a
+ * later shape publish cannot drop a stroke. Null follows the live shape.
+ */
+export function paintRibbonIds(liveShape: string, guideIds: readonly string[] | null): readonly string[] {
+  if (guideIds != null) return guideIds;
+  return contourRibbonsForShape(liveShape);
+}
+
+/** Brush head in [0, 1]. Unguided wraps the cycle; guided reaches 1 at 0.8 and holds. */
+export function brushProgress(cycleT: number, phase: number, guided: boolean): number {
+  const sum = (Number.isFinite(cycleT) ? cycleT : 0) + (Number.isFinite(phase) ? phase : 0);
+  let wrapped = sum % 1;
+  if (wrapped < 0) wrapped += 1;
+  if (!guided) return wrapped;
+  return wrapped >= GUIDE_REACH ? 1 : wrapped / GUIDE_REACH;
+}
+
+/**
+ * Per-sample stroke alpha. Samples past the head are 0. The head is the
+ * max of the painted prefix, capped at STROKE_HEAD_CAP.
+ */
+export function strokeAlphas(n: number, progress: number): number[] {
+  if (!Number.isFinite(n) || n <= 0) return [];
+  const count = Math.floor(n);
+  const out = new Array<number>(count).fill(0);
+  const p = Number.isFinite(progress) ? Math.min(1, Math.max(0, progress)) : 0;
+  const head = Math.ceil(p * count) - 1;
+  if (head < 0) return out;
+  const last = Math.min(count - 1, head);
+  for (let i = 0; i <= last; i++) {
+    const lead = last === 0 ? 1 : i / last;
+    out[i] = Math.min(STROKE_HEAD_CAP, STROKE_ALPHA * (0.4 + 0.6 * lead));
+  }
+  return out;
+}
+
+/** Nose-vs-ear yaw in degrees. A missing landmark or non-finite coordinate returns 0. */
+export function faceYawDeg(
+  nose: { x: number; y: number } | null | undefined,
+  earL: { x: number; y: number } | null | undefined,
+  earR: { x: number; y: number } | null | undefined,
+): number {
+  if (!nose || !earL || !earR) return 0;
+  const coords = [nose.x, nose.y, earL.x, earL.y, earR.x, earR.y];
+  if (coords.some((v) => !Number.isFinite(v))) return 0;
+  const span = Math.hypot(earR.x - earL.x, earR.y - earL.y);
+  if (!(span > 0)) return 0;
+  return ((nose.x - (earL.x + earR.x) / 2) / span) * 60;
+}
+
+/**
+ * Whole-ribbon occlusion. Frontal keeps both sides. Otherwise the
+ * centerline centroid must sit on the near side of the nose.
+ */
+export function ribbonVisible(
+  centroid: { x: number; y: number } | null | undefined,
+  yawDeg: number,
+  noseX: number,
+): boolean {
+  if (!centroid || !Number.isFinite(centroid.x) || !Number.isFinite(centroid.y)) return false;
+  if (!Number.isFinite(yawDeg) || Math.abs(yawDeg) < YAW_FRONTAL_DEG) return true;
+  if (!Number.isFinite(noseX)) return false;
+  const yawSign = yawDeg < 0 ? 1 : -1;
+  return yawSign * (centroid.x - noseX) >= -NEAR_SLACK;
+}
+
+function samplePath(
+  line: readonly { x: number; y: number }[],
+  steps: number,
+): { x: number; y: number }[] {
+  const out: { x: number; y: number }[] = [];
+  if (steps < 2 || line.length === 0) return out;
+  const last = line.length - 1;
+  for (let k = 0; k < steps; k++) {
+    const f = (k / (steps - 1)) * last;
+    const i0 = Math.floor(f);
+    const i1 = Math.min(last, i0 + 1);
+    const u = f - i0;
+    const a = line[i0];
+    const b = line[i1];
+    if (!a || !b) continue;
+    out.push({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u });
+  }
+  return out;
+}
+
+function lineCentroid(line: readonly { x: number; y: number }[]): { x: number; y: number } | null {
+  if (line.length === 0) return null;
+  let sx = 0;
+  let sy = 0;
+  for (const p of line) {
+    sx += p.x;
+    sy += p.y;
+  }
+  return { x: sx / line.length, y: sy / line.length };
+}
+
+function paintPuff(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  color: readonly [number, number, number],
+  a: number,
+): void {
+  if (!(r > 0) || !(a > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  const [cr, cg, cb] = color;
+  g.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
+  g.addColorStop(0.6, `rgba(${cr},${cg},${cb},${(a * 0.45).toFixed(3)})`);
+  g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/** Contour teaching layer. Mesh centerlines stay live; only the id list is locked. */
+export function paintContourLayer(
+  ctx: CanvasRenderingContext2D,
+  frame: {
+    width: number;
+    height: number;
+    ribbons: readonly Ribbon[];
+    liveShape: string;
+    guideIds: readonly string[] | null;
+    yawDeg: number;
+    noseX: number;
+    cycleT: number;
+    guided: boolean;
+  },
+): void {
+  const { width: W, height: H } = frame;
+  if (!(W > 0) || !(H > 0)) return;
+  const ids = paintRibbonIds(frame.liveShape, frame.guideIds);
+  for (const [idx, id] of ids.entries()) {
+    const line = frame.ribbons.find((r) => r.id === id)?.centerline;
+    if (!line || line.length < 2) continue;
+    const centroid = lineCentroid(line);
+    if (!centroid || !ribbonVisible(centroid, frame.yawDeg, frame.noseX)) continue;
+    const progress = brushProgress(frame.cycleT, (idx * 0.31) % 1, frame.guided);
+    for (const p of samplePath(line, GHOST_SAMPLES)) {
+      paintPuff(ctx, p.x * W, p.y * H, W * GHOST_RADIUS, TEACHING_GREY, GHOST_ALPHA);
+    }
+    const stroke = samplePath(line, STROKE_SAMPLES);
+    const alphas = strokeAlphas(stroke.length, progress);
+    for (let i = 0; i < stroke.length; i++) {
+      const a = alphas[i] ?? 0;
+      if (a <= 0) continue;
+      const p = stroke[i];
+      if (!p) continue;
+      paintPuff(ctx, p.x * W, p.y * H, W * STROKE_RADIUS, TEACHING_GREY, a);
+    }
+  }
 }
 
 /**
@@ -497,6 +676,7 @@ export function startLiveContour(
       const t = (performance.now() % cycle) / cycle;
 
       const paint = (x: number, y: number, r: number, color: [number, number, number], a: number) => {
+        if (!(r > 0) || !(a > 0) || !Number.isFinite(x) || !Number.isFinite(y)) return;
         const g = ctx.createRadialGradient(x, y, 0, x, y, r);
         const [cr, cg, cb] = color;
         g.addColorStop(0, `rgba(${cr},${cg},${cb},${a})`);
@@ -507,8 +687,6 @@ export function startLiveContour(
         ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fill();
       };
-      // The stroke: a trail of puffs along the path, the leading edge
-      // slightly stronger - reads as product being laid down, moving.
       const paintStroke = (
         path: Array<{ x: number; y: number }>,
         color: [number, number, number],
@@ -526,70 +704,36 @@ export function startLiveContour(
           paint(p.x * W, p.y * H, radius, color, Math.min(0.5, a));
         }
       };
-      const samplePath = (line: Array<{ x: number; y: number }>, steps: number) => {
-        const out: Array<{ x: number; y: number }> = [];
-        for (let k = 0; k < steps; k++) {
-          const f = (k / (steps - 1)) * (line.length - 1);
-          const i0 = Math.floor(f);
-          const i1 = Math.min(line.length - 1, i0 + 1);
-          const u = f - i0;
-          const a = line[i0]!, b = line[i1]!; // eslint-disable-line @typescript-eslint/no-unused-vars
-          out.push({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u });
-        }
-        return out;
-      };
 
       // ONE neutral teaching grey (2026-10-11): color overlays competed
       // with the product she is applying AND polluted the grader's camera
       // samples. Grey directs; her makeup is the only color on screen.
-      const GREY: [number, number, number] = [180, 184, 192];
-      // Side occlusion: when the head turns, only the visible side's zones
-      // mean anything on screen - the far side projects to garbage coords.
-      // Visible if the point's x (mirror-space) is on the TURNED-TOWARD
-      // side of the face's own midline.
-      const sideVisible = (p: { x: number; y: number }): boolean => {
-        const mid = meshPts.get(4)?.x ?? 0.5; // nose tip = face midline
-        const yawSign = (meshPts.get(4)?.x ?? 0.5) < (meshPts.get(234)!.x + meshPts.get(454)!.x) / 2 ? 1 : -1;
-        // facing left (her left): points with x > mid are the near side, etc.
-        return yawSign * (p.x - mid) >= -0.02;
-      };
-      const bothFrontal = Math.abs(faceMidYaw()) < 10;
-      function faceMidYaw(): number {
-        // crude yaw proxy: nose-tip x offset from ear midpoint, in iod units
-        const nose = meshPts.get(4), eL = meshPts.get(234), eR = meshPts.get(454);
-        if (!nose || !eL || !eR) return 0;
-        return ((nose.x - (eL.x + eR.x) / 2) / Math.hypot(eR.x - eL.x, eR.y - eL.y)) * 60;
-      }
+      const GREY: [number, number, number] = TEACHING_GREY;
+      const nosePt = meshPts.get(4);
+      const yawDeg = faceYawDeg(nosePt, meshPts.get(234), meshPts.get(454));
+      const noseX = nosePt?.x ?? 0.5;
 
       if (layer === "contour") {
-        const allIds = contourRibbonsForShape(shape);
-        const ids = guide?.ribbonIds ?? allIds;
-        allIds.filter((id) => ids.includes(id)).forEach((id, idx) => {
-          const r = cm!.ribbons.find((x) => x.id === id);
-          if (!r) return;
-          const line = (r.centerline ?? []).filter(bothFrontal ? () => true : sideVisible);
-          if (line.length >= 2) {
-            const phase = (idx * 0.31) % 1;
-            let tt = (t + phase) % 1;
-            if (guide) tt = Math.min(1, tt / 0.8); // sweep 80%, hold 20%
-            for (const p of samplePath(line, 22)) paint(p.x * W, p.y * H, W * 0.045, GREY, 0.08);
-            paintStroke(samplePath(line, 22), GREY, 0.22, W * 0.052, tt);
-          }
+        paintContourLayer(ctx, {
+          width: W,
+          height: H,
+          ribbons: cm!.ribbons,
+          liveShape: shape,
+          guideIds: guide?.ribbonIds ?? null,
+          yawDeg,
+          noseX,
+          cycleT: t,
+          guided: guide != null,
         });
       } else if (layer === "blush") {
         const motion = blushMotionForShape(shape);
         for (const side of ["_L", "_R"] as const) {
           const apple = cm!.zones.find((z) => z.id === "cheek_apple" + side);
-          if (!apple) continue;
-          // side occlusion: hide the far cheek when the head is turned
-          if (!bothFrontal) {
-            let sx0 = 0, sy0 = 0;
-            for (const q of apple.poly) { sx0 += q.x; sy0 += q.y; }
-            if (!sideVisible({ x: sx0 / apple.poly.length, y: sy0 / apple.poly.length })) continue;
-          }
+          if (!apple || apple.poly.length === 0) continue;
           let sx = 0, sy = 0;
           for (const q of apple.poly) { sx += q.x; sy += q.y; }
           const c = { x: sx / apple.poly.length, y: sy / apple.poly.length };
+          if (!ribbonVisible(c, yawDeg, noseX)) continue;
           const at2 = (i: number): { x: number; y: number } => meshPts.get(i) ?? c;
           const P = (idn: string): { x: number; y: number } => {
             switch (idn) {
