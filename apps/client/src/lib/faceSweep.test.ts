@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createSweepCollector,
+  classifyFromSweep,
+  centerNoseOnEarMidpoint,
   invertRigid,
   applyMat,
   poseAngles,
@@ -11,6 +13,8 @@ import {
   SWEEP_FUSED_LINE,
   type Mat4,
 } from "./faceSweep.ts";
+import { FACE_SHAPES } from "./coach/faceShape.ts";
+import { measureFace, normalizeFace, YAW_GATE } from "./coach/measure.ts";
 
 /** Column-major rigid transform from yaw (deg about Y) + pitch (deg about X). */
 function rigid(yawDeg: number, pitchDeg: number): Mat4 {
@@ -151,4 +155,92 @@ test("five sweep marks follow covered flags; copy keeps the four-view rule", () 
   assert.notEqual(moved, held);
   assert.equal(sweepProgress(moved, live), moved);
   assert.equal(col.finish(), null);
+});
+
+test("classifyFromSweep reads a fused head-local cloud", () => {
+  const c = createSweepCollector();
+  const pts = fakeLandmarks();
+  for (const [yaw, pitch] of [[0, 0], [25, 0], [-25, 0], [0, 15]]) {
+    const cam = pts.map((p) => applyMat(rigid(yaw, pitch), p));
+    c.feed(cam, rigid(yaw, pitch));
+  }
+  const sweep = c.finish();
+  assert.ok(sweep, "sweep produced");
+  const cls = classifyFromSweep(sweep!);
+  assert.ok(cls, "head-local fuse must classify; image-space MediaPipe frames are a separate prove");
+  assert.equal(typeof cls!.primary, "string");
+  assert.ok(cls!.primary.length > 0);
+  assert.ok(Number.isFinite(cls!.confidence) && cls!.confidence >= 0, `confidence ${cls!.confidence}`);
+  assert.equal(typeof cls!.cheekProm, "number");
+  assert.equal(typeof cls!.jawDepth, "number");
+  assert.ok(Number.isFinite(cls!.cheekProm) && Number.isFinite(cls!.jawDepth));
+});
+
+test("classifyFromSweep yaw-centers a fused cloud that would trip the live yaw gate", () => {
+  const base = fakeLandmarks();
+  // Nose below the ear line, then a roll, then a yaw shift. Setting nose x
+  // to the raw ear midpoint leaves a post-roll offset above YAW_GATE.
+  base[4] = { x: 0, y: 0.16, z: -0.15 };
+  const a = (22 * Math.PI) / 180;
+  const cos = Math.cos(a), sin = Math.sin(a);
+  const rolled = base.map((p) => ({
+    x: p.x * cos - p.y * sin,
+    y: p.x * sin + p.y * cos,
+    z: p.z,
+  }));
+  const earW = Math.hypot(rolled[454]!.x - rolled[234]!.x, rolled[454]!.y - rolled[234]!.y);
+  rolled[4] = { ...rolled[4]!, x: rolled[4]!.x + earW * 0.25 };
+  const raw = rolled.map((p) => ({ x: p.x, y: p.y }));
+  const before = normalizeFace(raw);
+  assert.ok(before, "synthetic cloud normalizes");
+  assert.equal(YAW_GATE, 0.06);
+  assert.ok(before.yawOffset > YAW_GATE, `pre-correct yawOffset ${before.yawOffset}`);
+  assert.equal(measureFace(raw), null, "live gate still refuses this cloud");
+
+  const shifted = raw.map((p) => ({ x: p.x + earW * 0.25, y: p.y }));
+  const yShift = normalizeFace(shifted)!.yawOffset;
+  assert.ok(Math.abs(yShift - before.yawOffset) < 1e-9, `whole-cloud shift changed yawOffset ${yShift}`);
+
+  const centered = centerNoseOnEarMidpoint(raw.map((p) => ({ ...p })));
+  const again = centerNoseOnEarMidpoint(centered.map((p) => ({ ...p })));
+  const after = normalizeFace(centered);
+  const afterAgain = normalizeFace(again);
+  assert.ok(after && afterAgain, "centered cloud normalizes");
+  assert.ok(after.yawOffset < 1e-9, `post-correct yawOffset ${after.yawOffset}`);
+  assert.ok(afterAgain.yawOffset < 1e-9, `second pass yawOffset ${afterAgain.yawOffset}`);
+  assert.ok(measureFace(centered), "centered cloud passes measureFace");
+  const moved: number[] = [];
+  for (const i of [4, 10, 33, 58, 61, 103, 127, 136, 152, 172, 234, 263, 288, 291, 332, 356, 365, 397, 454]) {
+    const a = before.points.get(i)!;
+    const b = after.points.get(i)!;
+    if (Math.abs(a.x - b.x) > 1e-9 || Math.abs(a.y - b.y) > 1e-9) moved.push(i);
+  }
+  assert.deepEqual(moved, [4], `centering moved ${moved.join(",")}`);
+
+  const noseBefore = { ...rolled[4]! };
+  const cls = classifyFromSweep({ points: rolled, viewCount: 4, t: 1 });
+  assert.deepEqual(rolled[4], noseBefore, "classifyFromSweep must not rewrite the fused cloud");
+  assert.ok(cls, "yaw-centered fuse classifies");
+  assert.ok((FACE_SHAPES as readonly string[]).includes(cls!.primary), cls!.primary);
+  assert.equal(cls!.primary.length > 0, true);
+  assert.ok(Number.isFinite(cls!.confidence) && cls!.confidence >= 0);
+});
+
+test("classifyFromSweep refuses a short, empty, or non-finite cloud", () => {
+  const pts = fakeLandmarks();
+  assert.equal(classifyFromSweep({ points: pts.slice(0, 100), viewCount: 4, t: 1 }), null);
+  assert.equal(classifyFromSweep(null as never), null);
+  const nanNose = pts.map((p) => ({ ...p }));
+  nanNose[4] = { x: Number.NaN, y: 0, z: 0 };
+  assert.equal(classifyFromSweep({ points: nanNose, viewCount: 4, t: 1 }), null);
+  const broken = pts.map((p) => ({ ...p }));
+  broken[116] = null as unknown as (typeof broken)[number];
+  assert.equal(classifyFromSweep({ points: broken, viewCount: 4, t: 1 }), null);
+  const noDepth = pts.map((p) => ({ ...p }));
+  noDepth[116] = { x: noDepth[116]!.x, y: noDepth[116]!.y, z: Number.NaN };
+  const cls = classifyFromSweep({ points: noDepth, viewCount: 4, t: 1 });
+  assert.ok(cls, "a non-finite cheek z still classifies from the 2D ratios");
+  assert.ok((FACE_SHAPES as readonly string[]).includes(cls!.primary), cls!.primary);
+  assert.equal(cls!.cheekProm, 0);
+  assert.ok(Number.isFinite(cls!.jawDepth));
 });

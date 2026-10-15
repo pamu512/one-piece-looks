@@ -36,6 +36,10 @@ export interface FaceSweep {
   viewCount: number;
   /** Best frontal-ish view seen during the sweep (for 2D fallbacks). */
   frontal?: { rollDeg: number; iod: number };
+  /** Head-local landmarks from the most frontal accepted view. 2D classify
+   *  prefers these over the multi-view median XY, which one-sided yaw sweeps
+   *  can smear. Depth extras still read `points`. */
+  frontalPoints?: SweepPoint[];
   t: number;
 }
 
@@ -203,7 +207,13 @@ export function createSweepCollector(maxViews = 48, minYawGap = 6) {
     const eR = frontalView.pts[263]!;
     const iod = Math.hypot(eR.x - eL.x, eR.y - eL.y);
     const rollDeg = (Math.atan2(eR.y - eL.y, eR.x - eL.x) * 180) / Math.PI;
-    return { points: pts, viewCount: accepted.length, frontal: { rollDeg, iod }, t: Date.now() };
+    return {
+      points: pts,
+      viewCount: accepted.length,
+      frontal: { rollDeg, iod },
+      frontalPoints: frontalView.pts.map((p) => ({ x: p.x, y: p.y, z: p.z })),
+      t: Date.now(),
+    };
   };
 
   return { feed, finish, state };
@@ -211,19 +221,41 @@ export function createSweepCollector(maxViews = 48, minYawGap = 6) {
 
 /* ---------- 3D measurements from the fused model ---------- */
 
-import { classifyFace, FACE_SHAPES } from "./coach/faceShape.ts";
-import { measureFace } from "./coach/measure.ts";
+import { classifyFace } from "./coach/faceShape.ts";
+import { MEASURE_INDICES, measureFace } from "./coach/measure.ts";
 
 /**
- * Classify from the FUSED 3D model: project the head-local points into a
- * frontal 2D plane (drop z) — which is exactly a frontal, roll-free,
- * yaw-free view of her face — then run the existing cascade. The fused
- * model also yields depth measures the 2D cascade cannot see:
- *
- *   cheekProm: cheekbone forward protrusion vs the ear line (3D only)
- *   jawDepth:  chin forward vs jaw corners (3D only)
- *
- * Returns the classification plus the 3D extras for display/calibration.
+ * Place the nose tip on the ear midpoint in the roll frame measureFace
+ * applies, then return the same array. Width ratios do not read landmark 4.
+ * A pure shift of every point would leave yawOffset unchanged.
+ */
+export function centerNoseOnEarMidpoint(flat: { x: number; y: number }[]): { x: number; y: number }[] {
+  const nose = flat[MEASURE_INDICES.noseTip];
+  const earL = flat[MEASURE_INDICES.earL];
+  const earR = flat[MEASURE_INDICES.earR];
+  const eyeL = flat[MEASURE_INDICES.eyeOuterL];
+  const eyeR = flat[MEASURE_INDICES.eyeOuterR];
+  if (!nose || !earL || !earR || !eyeL || !eyeR) return flat;
+  const ok = (p: { x: number; y: number }) => Number.isFinite(p.x) && Number.isFinite(p.y);
+  if (!ok(nose) || !ok(earL) || !ok(earR) || !ok(eyeL) || !ok(eyeR)) return flat;
+
+  const roll = Math.atan2(eyeR.y - eyeL.y, eyeR.x - eyeL.x);
+  const cos = Math.cos(-roll);
+  const sin = Math.sin(-roll);
+  const rotX = (p: { x: number; y: number }) => p.x * cos - p.y * sin;
+  const rotY = (p: { x: number; y: number }) => p.x * sin + p.y * cos;
+  const midX = (rotX(earL) + rotX(earR)) / 2;
+  const noseY = rotY(nose);
+  flat[MEASURE_INDICES.noseTip] = {
+    x: midX * cos + noseY * sin,
+    y: -midX * sin + noseY * cos,
+  };
+  return flat;
+}
+
+/**
+ * Drop z, put nose tip x on ear midpoint 234/454 in measureFace's roll
+ * frame, then classify. Live frames still hit the yaw gate.
  */
 export function classifyFromSweep(sweep: FaceSweep): {
   primary: string;
@@ -232,17 +264,34 @@ export function classifyFromSweep(sweep: FaceSweep): {
   cheekProm: number;
   jawDepth: number;
 } | null {
-  const pts = sweep.points;
-  if (pts.length < 468) return null;
-  const frontal2D = pts.map((p) => ({ x: p.x, y: p.y }));
+  const pts = sweep?.points;
+  if (!pts || pts.length < 468) return null;
+  if (pts.some((p) => p == null)) return null;
+  // Prefer the most-frontal view's head-local XY for the 2D cascade. The
+  // multi-view median XY can smear on one-sided yaw Y4Ms and collapse the
+  // margin even after nose centering clears the yaw gate. Depth extras below
+  // still use the fused median `points`.
+  const src2D =
+    sweep.frontalPoints && sweep.frontalPoints.length >= 468 && !sweep.frontalPoints.some((p) => p == null)
+      ? sweep.frontalPoints
+      : pts;
+  const frontal2D = src2D.map((p) => ({ x: p.x, y: p.y }));
+  centerNoseOnEarMidpoint(frontal2D);
   const m = measureFace(frontal2D);
   if (!m) return null;
   const cls = classifyFace(m);
-  // 3D-only extras (medians make these stable):
-  const prom = (a: number, b: number, ear: number) =>
-    ((pts[a]!.z + pts[b]!.z) / 2 - pts[ear]!.z); // negative = forward
-  const cheekProm = -(prom(116, 345, 234) + prom(116, 345, 454)) / 2;
-  const jawDepth = -(pts[152]!.z - (pts[172]!.z + pts[397]!.z) / 2);
+  if (!Number.isFinite(cls.confidence)) return null;
+  // 3D-only extras (medians make these stable). z is negative when forward.
+  const z = (i: number): number => {
+    const v = pts[i]?.z;
+    return typeof v === "number" && Number.isFinite(v) ? v : Number.NaN;
+  };
+  const prom = (a: number, b: number, ear: number) => (z(a) + z(b)) / 2 - z(ear);
+  const cheekRaw = -(prom(116, 345, 234) + prom(116, 345, 454)) / 2;
+  const jawRaw = -(z(152) - (z(172) + z(397)) / 2);
+  // ponytail: non-finite depth becomes 0. Upgrade: omit the field when z is missing.
+  const cheekProm = Number.isFinite(cheekRaw) ? cheekRaw : 0;
+  const jawDepth = Number.isFinite(jawRaw) ? jawRaw : 0;
   return {
     primary: cls.primary,
     secondary: cls.secondary,
