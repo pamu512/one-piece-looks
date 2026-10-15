@@ -22,7 +22,7 @@ import {
 } from "./components/capture";
 
 /* =================================================================
- * One Piece Looks. Three beats, one persistent face photo.
+ * Sculpt. Three beats, one persistent face photo.
  *
  * Beat 1  camera: full-bleed mirror, glowing oval guide, one shutter.
  *         A brief scan auto-suggests the lock (zero taps); tap adjusts.
@@ -661,7 +661,7 @@ function LooksStage({
   /** Download from the preview. The card has been visible >= the open dwell. */
   const saveFromPreview = () => {
     if (!shareCard) return;
-    downloadBlob(shareCard.blob, "one-piece-looks.png");
+    downloadBlob(shareCard.blob, "sculpt.png");
     setShareState("downloaded");
     setTimeout(() => setShareState("idle"), 2200);
     closeSharePreview();
@@ -670,7 +670,7 @@ function LooksStage({
   /** Share from the preview via the system sheet; falls back to download. */
   const shareFromPreview = async () => {
     if (!shareCard) return;
-    const out = await shareLooksPng(shareCard.blob, "One Piece Looks", "My three looks");
+    const out = await shareLooksPng(shareCard.blob, "Sculpt", "My three looks");
     if (out === "cancelled") return; // keep the preview up
     setShareState(out === "shared" ? "shared" : out === "downloaded" ? "downloaded" : "failed");
     setTimeout(() => setShareState("idle"), 2200);

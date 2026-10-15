@@ -136,7 +136,7 @@ export async function shareLooksPng(
   title: string,
   text: string,
 ): Promise<"shared" | "downloaded" | "cancelled" | "failed"> {
-  const file = new File([blob], "one-piece-looks.png", { type: "image/png" });
+  const file = new File([blob], "sculpt.png", { type: "image/png" });
   const nav = navigator as Navigator & {
     canShare?: (d: ShareData) => boolean;
     share?: (d: ShareData) => Promise<void>;
@@ -150,7 +150,7 @@ export async function shareLooksPng(
       // fall through to download on non-user-cancel failure
     }
   }
-  const ok = downloadBlob(blob, "one-piece-looks.png");
+  const ok = downloadBlob(blob, "sculpt.png");
   return ok ? "downloaded" : "failed";
 }
 
