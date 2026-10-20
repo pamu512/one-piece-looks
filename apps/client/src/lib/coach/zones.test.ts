@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { normalizeFace, type CoachPoint } from "./measure.ts";
-import { buildContourMap, pointInPoly, polyInsideHull, RIBBON_SAMPLES, ribbonPolygon, type ContourMap, type Pt } from "./zones.ts";
+import { buildContourMap, pointInPoly, polyInsideHull, RIBBON_SAMPLES, ribbonPolygon, yawMedialT, YAW_MEDIAL_FULL_DEG, type ContourMap, type Pt } from "./zones.ts";
 
 function canonicalFrontal(): CoachPoint[] {
   const pts: CoachPoint[] = [];
@@ -121,4 +121,50 @@ test("pointInPoly agrees with the shared mesh helper on a square", () => {
   const sq: Pt[] = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }];
   assert.equal(pointInPoly(0.5, 0.5, sq), true);
   assert.equal(pointInPoly(1.5, 0.5, sq), false);
+});
+
+test("yaw 0 keeps the ear anchor and matches the no-yaw map", () => {
+  assert.equal(yawMedialT(0), 0);
+  assert.equal(yawMedialT(-0), 0);
+  assert.equal(yawMedialT(Number.NaN), 0);
+  assert.equal(yawMedialT(Number.POSITIVE_INFINITY), 0);
+  assert.equal(yawMedialT(YAW_MEDIAL_FULL_DEG / 2), 0.5);
+  assert.equal(yawMedialT(YAW_MEDIAL_FULL_DEG), 1);
+  assert.equal(yawMedialT(-YAW_MEDIAL_FULL_DEG), 1);
+  const face = normalizeFace(canonicalFrontal())!;
+  const a = buildContourMap(face);
+  const b = buildContourMap(face, 0);
+  assert.equal(JSON.stringify(a), JSON.stringify(b));
+  const line = a.ribbons.find((r) => r.id === "cheek_shelf_L")!.centerline!;
+  const ear = face.points.get(234)!;
+  assert.ok(Math.hypot(line[0]!.x - ear.x, line[0]!.y - ear.y) < 1e-9);
+  const tip = a.ribbons.find((r) => r.id === "cheek_tip_L")!.centerline!;
+  const side = face.points.get(227)!;
+  assert.ok(Math.hypot(tip[0]!.x - side.x, tip[0]!.y - side.y) < 1e-9);
+});
+
+test("full yaw starts the cheek shelf on the hollow landmark", () => {
+  const face = normalizeFace(canonicalFrontal())!;
+  face.points.set(123, { x: 1.2, y: 2.4 });
+  face.points.set(147, { x: 1.35, y: 2.55 });
+  face.points.set(352, { x: 3.2, y: 2.4 });
+  face.points.set(376, { x: 3.05, y: 2.55 });
+  face.points.set(117, { x: 1.05, y: 1.9 });
+  face.points.set(346, { x: 3.35, y: 1.9 });
+  const map = buildContourMap(face, YAW_MEDIAL_FULL_DEG);
+  const start = (id: string) => map.ribbons.find((r) => r.id === id)!.centerline![0]!;
+  const near = (id: string, idx: number) => {
+    const q = face.points.get(idx)!;
+    const pt = start(id);
+    assert.ok(Math.hypot(pt.x - q.x, pt.y - q.y) < 1e-9, `${id} starts on ${idx}`);
+  };
+  near("cheek_shelf_L", 123);
+  near("cheek_shelf_R", 352);
+  near("cheek_tip_L", 117);
+  near("cheek_tip_R", 346);
+  face.points.delete(123);
+  const fallen = buildContourMap(face, YAW_MEDIAL_FULL_DEG);
+  const back = fallen.ribbons.find((r) => r.id === "cheek_shelf_L")!.centerline![0]!;
+  const ear = face.points.get(234)!;
+  assert.ok(Math.hypot(back.x - ear.x, back.y - ear.y) < 1e-9);
 });

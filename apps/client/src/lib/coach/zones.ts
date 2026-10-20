@@ -78,6 +78,34 @@ export type RibbonId =
   | "under_chin"
   | "hairline_top";
 
+/** |yaw| where the ear→hollow blend is 1. f(0) = 0 on the faceYawDeg scale. */
+export const YAW_MEDIAL_FULL_DEG = 25;
+
+/** 0 at yaw 0, 1 once |yaw| reaches YAW_MEDIAL_FULL_DEG. Non-finite yaw stays 0. */
+export function yawMedialT(yawDeg: number): number {
+  if (!Number.isFinite(yawDeg)) return 0;
+  const a = Math.abs(yawDeg);
+  if (!(a > 0)) return 0;
+  const u = Math.min(1, a / YAW_MEDIAL_FULL_DEG);
+  return u * u * (3 - 2 * u);
+}
+
+/** Ear→hollow. f(0) keeps the ear index. Shelf 234→123, 116→147; 454→352, 345→376. Tip 227→117; 447→346. */
+export const CHEEK_YAW_ANCHOR: Record<"cheek_shelf_L" | "cheek_shelf_R" | "cheek_tip_L" | "cheek_tip_R", readonly (readonly [number, number])[]> = {
+  cheek_shelf_L: [[234, 123], [116, 147]],
+  cheek_shelf_R: [[454, 352], [345, 376]],
+  cheek_tip_L: [[227, 117]],
+  cheek_tip_R: [[447, 346]],
+};
+
+/** Hollow midpoint for placement checks: the two medial shelf landmarks. */
+export const CHEEK_HOLLOW_INDEX = {
+  cheek_shelf_L: [123, 147] as const,
+  cheek_shelf_R: [352, 376] as const,
+} as const;
+
+export const CHEEK_EAR_INDEX = { cheek_shelf_L: 234, cheek_shelf_R: 454 } as const;
+
 /** mirrorable catalogs: zones/ribbons emitted as L/R pairs where sensible. */
 export interface ContourMap {
   zones: Zone[];
@@ -94,6 +122,15 @@ function at(face: NormalizedFace, i: number): Pt {
 
 function lerp(a: Pt, b: Pt, t: number): Pt {
   return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+/** Ear point at t=0. Missing or non-finite medial point stays on the ear point. */
+function yawAnchor(face: NormalizedFace, earIdx: number, medialIdx: number, t: number): Pt {
+  const ear = at(face, earIdx);
+  if (!(t > 0)) return ear;
+  const med = face.points.get(medialIdx);
+  if (!med || !Number.isFinite(med.x) || !Number.isFinite(med.y)) return ear;
+  return lerp(ear, med, t);
 }
 
 /** Catmull-Rom sample of an open polyline (densifies sparse mesh arcs). */
@@ -186,9 +223,15 @@ function clipToHull(poly: Pt[], center: Pt, hull: readonly Pt[]): Pt[] {
  * face in, the same polygons out (no RNG anywhere). Every polygon is
  * clipped to the skin hull (spec 5.1: "clipped to skin hull").
  */
-export function buildContourMap(face: NormalizedFace): ContourMap {
+export function buildContourMap(face: NormalizedFace, yawDeg = 0): ContourMap {
   const iod = face.iod;
   const p = (i: number) => at(face, i);
+  const t = yawMedialT(yawDeg);
+  const pair = (id: keyof typeof CHEEK_YAW_ANCHOR, i: number): Pt => {
+    const row = CHEEK_YAW_ANCHOR[id][i];
+    if (!row) throw new Error(`missing yaw anchor ${id} ${i}`);
+    return yawAnchor(face, row[0], row[1], t);
+  };
   const zones: Zone[] = [];
   const ribbons: Ribbon[] = [];
 
@@ -233,14 +276,14 @@ export function buildContourMap(face: NormalizedFace): ContourMap {
   pushRibbon("jaw_L", [p(172), p(136), p(150), p(149), p(176)], 0.12);
   pushRibbon("jaw_R", [p(397), p(365), p(379), p(378), p(400)], 0.12);
   // cheek_shelf: ear top toward the mouth corner, stopping ~60% of the way
-  pushRibbon("cheek_shelf_L", [p(234), p(116), lerp(p(50), p(61), 0.6)], 0.08);
-  pushRibbon("cheek_shelf_R", [p(454), p(345), lerp(p(280), p(291), 0.6)], 0.08);
+  pushRibbon("cheek_shelf_L", [pair("cheek_shelf_L", 0), pair("cheek_shelf_L", 1), lerp(p(50), p(61), 0.6)], 0.08);
+  pushRibbon("cheek_shelf_R", [pair("cheek_shelf_R", 0), pair("cheek_shelf_R", 1), lerp(p(280), p(291), 0.6)], 0.08);
   // cheek_tip: rides ON the cheekbone widest point (116/345) angled down the
   // face side — the diamond placement ("tips of the cheekbones, not
   // underneath"). cheek_shelf shades the hollow BELOW the bone (round/square
   // placement); cheek_tip shades the width AT the bone.
-  pushRibbon("cheek_tip_L", [p(227), p(116), p(205), p(50)], 0.07);
-  pushRibbon("cheek_tip_R", [p(447), p(345), p(425), p(280)], 0.07);
+  pushRibbon("cheek_tip_L", [pair("cheek_tip_L", 0), p(116), p(205), p(50)], 0.07);
+  pushRibbon("cheek_tip_R", [pair("cheek_tip_R", 0), p(345), p(425), p(280)], 0.07);
   // under_chin: 148-152-377 arc, inset down (toward the neck)
   pushRibbon("under_chin", [p(148), { x: p(152).x, y: p(152).y + 0.015 * iod }, p(377)], 0.1);
 

@@ -21,7 +21,14 @@
 import { loadVision } from "./faceMesh.ts";
 import { measureFace } from "./coach/measure.ts";
 import { classifyFace, FACE_SHAPES, type FaceShape } from "./coach/faceShape.ts";
-import { buildContourMap, type ContourMap, type Ribbon, type RibbonId } from "./coach/zones.ts";
+import {
+  buildContourMap,
+  CHEEK_EAR_INDEX,
+  CHEEK_HOLLOW_INDEX,
+  type ContourMap,
+  type Ribbon,
+  type RibbonId,
+} from "./coach/zones.ts";
 import type { CoachPoint } from "./coach/measure.ts";
 import { rules } from "./coach/plan.ts";
 import { createSweepCollector, classifyFromSweep, type FaceSweep, type SweepState } from "./faceSweep.ts";
@@ -119,6 +126,44 @@ const TOOL_LINES = {
 };
 
 const cap = (x: string) => x.charAt(0).toUpperCase() + x.slice(1);
+
+export type TeachRole = "anchor" | "lift" | "statement";
+
+/**
+ * Guided lesson for the look she was holding.
+ * Anchor is shade, Lift adds blush, Statement is the full order
+ * (shade, then blush, then light). A shape with none of those steps
+ * falls back to the full lesson so Teach never opens blank.
+ */
+export function lessonForRole(shape: string, role: TeachRole): LessonStep[] {
+  const all = buildLesson(shape);
+  const want: CoachLayer[] =
+    role === "anchor" ? ["contour"] :
+    role === "lift" ? ["contour", "blush"] :
+    ["contour", "blush", "highlight"];
+  const picked = all.filter((s) => want.includes(s.layer));
+  return picked.length > 0 ? picked : all;
+}
+
+export type FocusGuideAction = "wait" | "keep" | "open";
+
+/**
+ * Whether a role handoff should open its lesson.
+ * Stop and Done wait. Past the first step, a new shape keeps the lesson
+ * she already started. The same shape at step 0 does not reopen it.
+ */
+export function focusGuideAction(input: {
+  focusRole: TeachRole | null;
+  stopped: boolean;
+  shape: string | null | undefined;
+  guideIdx: number | null;
+  openedShape: string | null;
+}): FocusGuideAction {
+  if (!input.focusRole || input.stopped || !input.shape) return "wait";
+  if (input.guideIdx !== null && input.guideIdx > 0) return "keep";
+  if (input.openedShape === input.shape && input.guideIdx === 0) return "keep";
+  return "open";
+}
 
 /** The ordered lesson for a shape: each shade region, then blush, then light. */
 export function buildLesson(shape: string): LessonStep[] {
@@ -231,6 +276,14 @@ export const STROKE_SAMPLES = 22;
 /** |yaw| under this paints both sides. */
 export const YAW_FRONTAL_DEG = 10;
 
+/** |yaw| at or above this hides every ribbon (near profile on the faceYawDeg scale). */
+export const YAW_RIBBON_MAX_DEG = 48;
+
+/** Hollow cap, as a fraction of the ear-to-hollow span. Yawed frames also require the centroid past that span and the start off the ear. */
+export const CHEEK_HOLLOW_MAX_SPAN = 0.65;
+export const CHEEK_EAR_MIN_SPAN = 1;
+export const CHEEK_START_EAR_MIN_SPAN = 0.25;
+
 /** Guided brush reaches the end here, then holds through the rest of the 3200ms cycle. */
 const GUIDE_REACH = 0.8;
 
@@ -288,8 +341,8 @@ export function faceYawDeg(
 }
 
 /**
- * Whole-ribbon occlusion. Frontal keeps both sides. Otherwise the
- * centerline centroid must sit on the near side of the nose.
+ * Whole-ribbon occlusion. Frontal keeps both sides. At or past the profile
+ * cutoff nothing paints. Otherwise the centroid must sit on the near side.
  */
 export function ribbonVisible(
   centroid: { x: number; y: number } | null | undefined,
@@ -297,10 +350,93 @@ export function ribbonVisible(
   noseX: number,
 ): boolean {
   if (!centroid || !Number.isFinite(centroid.x) || !Number.isFinite(centroid.y)) return false;
-  if (!Number.isFinite(yawDeg) || Math.abs(yawDeg) < YAW_FRONTAL_DEG) return true;
+  if (!Number.isFinite(yawDeg)) return true;
+  if (Math.abs(yawDeg) >= YAW_RIBBON_MAX_DEG) return false;
+  if (Math.abs(yawDeg) < YAW_FRONTAL_DEG) return true;
   if (!Number.isFinite(noseX)) return false;
   const yawSign = yawDeg < 0 ? 1 : -1;
   return yawSign * (centroid.x - noseX) >= -NEAR_SLACK;
+}
+
+export interface CheekPlacement {
+  id: "cheek_shelf_L" | "cheek_shelf_R";
+  visible: boolean;
+  centroid: { x: number; y: number } | null;
+  lineStart: { x: number; y: number } | null;
+  hollow: { x: number; y: number } | null;
+  ear: { x: number; y: number } | null;
+  hollowDist: number | null;
+  earDist: number | null;
+  startEarDist: number | null;
+  span: number | null;
+}
+
+export interface ContourFrameProbe {
+  yawDeg: number;
+  noseX: number;
+  cheeks: CheekPlacement[];
+  /** Landmark fractions the prove uses to see where the shelf actually sits. */
+  marks: Record<string, { x: number; y: number } | null>;
+}
+
+function finitePt(p: { x: number; y: number } | undefined): { x: number; y: number } | null {
+  if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+  return { x: p.x, y: p.y };
+}
+
+/** Cheek-shelf centroid against the hollow midpoint and the ear anchor, in landmark fractions. */
+export function cheekRibbonPlacement(
+  ribbons: readonly { id: string; centerline?: readonly { x: number; y: number }[] }[],
+  points: ReadonlyMap<number, { x: number; y: number }>,
+  yawDeg: number,
+  noseX: number,
+): CheekPlacement[] {
+  const ids = ["cheek_shelf_L", "cheek_shelf_R"] as const;
+  return ids.map((id) => {
+    const line = ribbons.find((r) => r.id === id)?.centerline;
+    const centroid = line && line.length > 0 ? lineCentroid(line) : null;
+    const lineStart = line && line.length > 0 ? { x: line[0]!.x, y: line[0]!.y } : null;
+    const [h0, h1] = CHEEK_HOLLOW_INDEX[id];
+    const a = finitePt(points.get(h0));
+    const b = finitePt(points.get(h1));
+    const hollow = a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
+    const ear = finitePt(points.get(CHEEK_EAR_INDEX[id]));
+    const hollowDist = centroid && hollow ? Math.hypot(centroid.x - hollow.x, centroid.y - hollow.y) : null;
+    const earDist = centroid && ear ? Math.hypot(centroid.x - ear.x, centroid.y - ear.y) : null;
+    const startEarDist = lineStart && ear ? Math.hypot(lineStart.x - ear.x, lineStart.y - ear.y) : null;
+    const span = hollow && ear ? Math.hypot(hollow.x - ear.x, hollow.y - ear.y) : null;
+    const visible = !!(line && line.length >= 2 && centroid && ribbonVisible(centroid, yawDeg, noseX));
+    return { id, visible, centroid, lineStart, hollow, ear, hollowDist, earDist, startEarDist, span };
+  });
+}
+
+/** Null when a visible shelf is on the hollow. Ear floor applies only when `yawed` is set. */
+export function cheekPlacementFault(p: CheekPlacement, yawed: boolean): string | null {
+  if (!p.visible) return null;
+  if (p.hollowDist == null || p.span == null || !(p.span > 1e-4)) return `${p.id} missing hollow reference`;
+  const hollowCap = CHEEK_HOLLOW_MAX_SPAN * p.span;
+  if (!(p.hollowDist < hollowCap)) {
+    return `${p.id} hollowDist ${p.hollowDist.toFixed(4)} >= ${hollowCap.toFixed(4)}`;
+  }
+  if (!yawed) return null;
+  const earFloor = CHEEK_EAR_MIN_SPAN * p.span;
+  if (p.earDist == null || !(p.earDist > earFloor)) {
+    return `${p.id} earDist ${p.earDist == null ? "none" : p.earDist.toFixed(4)} <= ${earFloor.toFixed(4)}`;
+  }
+  const startFloor = CHEEK_START_EAR_MIN_SPAN * p.span;
+  if (p.startEarDist == null || !(p.startEarDist > startFloor)) {
+    return `${p.id} startEarDist ${p.startEarDist == null ? "none" : p.startEarDist.toFixed(4)} <= ${startFloor.toFixed(4)}`;
+  }
+  return null;
+}
+
+function publishContourProbe(probe: ContourFrameProbe | null): void {
+  const host = globalThis as {
+    __oplContourFrame?: ContourFrameProbe | null;
+    __oplCheekPlacementFault?: typeof cheekPlacementFault;
+  };
+  host.__oplContourFrame = probe;
+  host.__oplCheekPlacementFault = cheekPlacementFault;
 }
 
 function samplePath(
@@ -650,7 +786,8 @@ export function startLiveContour(
             } catch { /* keep last shape and the current run */ }
           }
           try {
-            cm = buildContourMap(buildNormalizedRaw(pts));
+            const yawDeg = faceYawDeg(pts[4], pts[234], pts[454]);
+            cm = buildContourMap(buildNormalizedRaw(pts), yawDeg);
           } catch {
             cm = null;
           }
@@ -663,7 +800,10 @@ export function startLiveContour(
       }
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (!cm) return;
+      if (!cm) {
+        publishContourProbe(null);
+        return;
+      }
       const W = canvas.width, H = canvas.height;
       // Airbrush only (2026-10-11: no SAW face). No polygons, no outlines,
       // no markers: soft radial product whose motion IS the instruction.
@@ -712,6 +852,17 @@ export function startLiveContour(
       const nosePt = meshPts.get(4);
       const yawDeg = faceYawDeg(nosePt, meshPts.get(234), meshPts.get(454));
       const noseX = nosePt?.x ?? 0.5;
+      publishContourProbe({
+        yawDeg,
+        noseX,
+        cheeks: cheekRibbonPlacement(cm.ribbons, meshPts, yawDeg, noseX),
+        marks: Object.fromEntries(
+          [4, 21, 50, 54, 103, 116, 117, 123, 147, 162, 187, 205, 227, 234, 251, 280, 284, 332, 345, 346, 352, 376, 389, 411, 425, 447, 454].map((i) => {
+            const p = meshPts.get(i);
+            return [String(i), p && Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null];
+          }),
+        ),
+      });
 
       if (layer === "contour") {
         paintContourLayer(ctx, {

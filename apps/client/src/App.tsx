@@ -13,7 +13,8 @@ import { warmDecode } from "./lib/warmDecode";
 import { buildPlan } from "./lib/coach/plan.ts";
 import { depthOf } from "./lib/coach/shades.ts";
 import { CoachOverlay } from "./components/coachOverlay";
-import { startLiveContour, resolveGuideLesson, type LiveContourState, type LessonStep } from "./lib/liveContour.ts";
+import { startLiveContour, resolveGuideLesson, lessonForRole, focusGuideAction, type LiveContourState, type LessonStep, type TeachRole } from "./lib/liveContour.ts";
+import { keepLooksMounted, pageFromStrip, stageAfterCoachBack, stageAfterLooksDemo, stageAfterTeach } from "./lib/stageNav.ts";
 import { sweepMarks, sweepProgress, SWEEP_DONE_LINE, SWEEP_FUSED_LINE, type SweepState } from "./lib/faceSweep.ts";
 import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
@@ -108,6 +109,7 @@ export default function App() {
 
   const [error, setError] = useState<{ msg: string; retry?: () => void } | null>(null);
   const [phase, setPhase] = useState<"skin" | "building" | null>(null);
+  const [coachFocus, setCoachFocus] = useState<TeachRole | null>(null);
 
   const faceInFlight = useRef(false);
   const [faceAttempt, setFaceAttempt] = useState(0);
@@ -167,6 +169,7 @@ export default function App() {
     setLandmarks(null);
     setMood("Soft"); setEvent("Casual"); setLooks(null); setBuiltPair(null);
     setError(null); setPhase(null); setBusy(false);
+    setCoachFocus(null);
     setSession(null);
     api.createSession().then(setSession).catch(() => undefined);
   };
@@ -215,7 +218,14 @@ export default function App() {
         </div>
       )}
 
-      {stage === "coach" && <LiveCoachStage onExit={() => setStage("camera")} />}
+      {stage === "coach" && (
+        <LiveCoachStage
+          focusRole={coachFocus}
+          canOpenLooks={lock != null}
+          onExit={() => setStage(stageAfterCoachBack())}
+          onLooks={() => setStage(stageAfterLooksDemo(lock != null))}
+        />
+      )}
 
       {stage === "camera" && (
         <CameraStage
@@ -244,21 +254,30 @@ export default function App() {
           phase={phase}
         />
       )}
-      {stage === "looks" && lock && (
-        <LooksStage
-          photo={photo}
-          looks={looks}
-          lock={lock}
-          mood={mood} event={event} onMood={setMood} onEvent={setEvent}
-          pairDirty={pairDirty}
-          faceShape={landmarks?.faceShape ?? null}
-          skinHex={face?.tone.source === "api" ? face.tone.skinColor : (face?.toneHex ?? "#c28e6b")}
-          lockHex={lock.onFaceHex}
-          onRebuild={() => void buildLooks(mood, event)}
-          onShuffle={() => void shuffle()}
-          onRestart={restart}
-          busy={busy}
-        />
+      {keepLooksMounted(stage, lock != null) && lock && (
+        <div
+          className={stage === "looks" ? undefined : "looks-parked"}
+          inert={stage === "looks" ? undefined : true}
+          aria-hidden={stage === "looks" ? undefined : true}
+        >
+          <LooksStage
+            photo={photo}
+            looks={looks}
+            lock={lock}
+            mood={mood} event={event} onMood={setMood} onEvent={setEvent}
+            pairDirty={pairDirty}
+            faceShape={landmarks?.faceShape ?? null}
+            skinHex={face?.tone.source === "api" ? face.tone.skinColor : (face?.toneHex ?? "#c28e6b")}
+            lockHex={lock.onFaceHex}
+            shown={stage === "looks"}
+            onOpenCoach={() => { setCoachFocus(null); setStage(stageAfterTeach()); }}
+            onTeachRole={(role) => { setCoachFocus(role); setStage(stageAfterTeach()); }}
+            onRebuild={() => void buildLooks(mood, event)}
+            onShuffle={() => void shuffle()}
+            onRestart={restart}
+            busy={busy}
+          />
+        </div>
       )}
     </div>
   );
@@ -556,7 +575,7 @@ const ROLE_TAGLINE: Record<Look["role"], string> = {
 
 function LooksStage({
   photo, looks, lock, mood, event, onMood, onEvent, pairDirty, onRebuild, onShuffle, onRestart, busy,
-  faceShape, skinHex, lockHex,
+  faceShape, skinHex, lockHex, onOpenCoach, onTeachRole, shown,
 }: {
   photo: string | null;
   looks: LooksResult | null;
@@ -565,6 +584,10 @@ function LooksStage({
   onMood: (m: Mood) => void; onEvent: (e: Event) => void;
   pairDirty: boolean;
   onRebuild: () => void; onShuffle: () => void; onRestart: () => void;
+  onOpenCoach: () => void;
+  onTeachRole: (role: Look["role"]) => void;
+  /** False while the stage is parked under the coach. */
+  shown: boolean;
   busy: boolean;
   /** Coach classification of the capture; null when the yaw gate refused. */
   faceShape: string | null;
@@ -594,6 +617,14 @@ function LooksStage({
     }
   }, [faceShape, skinHex, lockHex]);
   const [page, setPage] = useState(0);
+  const pageRef = useRef(page);
+  pageRef.current = page;
+  const ignoreScroll = useRef(false);
+  const shownRef = useRef(shown);
+  if (shownRef.current !== shown) {
+    shownRef.current = shown;
+    if (shown) ignoreScroll.current = true;
+  }
   const [bare, setBare] = useState(false);
   const [shareState, setShareState] = useState<"idle" | "working" | "shared" | "downloaded" | "failed">("idle");
   const stripRef = useRef<HTMLDivElement | null>(null);
@@ -605,12 +636,37 @@ function LooksStage({
     const el = stripRef.current;
     if (!el) return;
     const onScroll = () => {
-      const i = Math.round(el.scrollLeft / el.clientWidth);
-      setPage(Math.max(0, Math.min(2, i)));
+      if (ignoreScroll.current) return;
+      const i = pageFromStrip(el.scrollLeft, el.clientWidth);
+      if (i == null) return;
+      setPage(i);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     return () => el.removeEventListener("scroll", onScroll);
   }, [looks]);
+
+  // Coming back from the coach reflows the strip. Put the open card back
+  // before the next scroll reading is trusted.
+  useEffect(() => {
+    if (!shown) return;
+    const el = stripRef.current;
+    if (!el) { ignoreScroll.current = false; return; }
+    let frames = 0;
+    let raf = 0;
+    const restore = () => {
+      const w = el.clientWidth;
+      if (!(w > 0)) {
+        if (frames++ < 8) { raf = requestAnimationFrame(restore); return; }
+        ignoreScroll.current = false;
+        return;
+      }
+      const left = pageRef.current * w;
+      if (Math.abs(el.scrollLeft - left) > 1) el.scrollTo({ left, behavior: "auto" });
+      ignoreScroll.current = false;
+    };
+    raf = requestAnimationFrame(restore);
+    return () => cancelAnimationFrame(raf);
+  }, [shown, looks]);
 
   const goto = (i: number) => {
     const el = stripRef.current;
@@ -723,7 +779,14 @@ function LooksStage({
           {showHex ? lock.onFaceHex : `Your ${ZONE_WORD[lock.category]}, kept`}
         </button>
         <Pips step={2} />
-        <button className="top-link" onClick={onRestart}>Start over</button>
+        <div className="top-links">
+          <button type="button" className="top-link" onClick={onOpenCoach} onPointerDown={(e) => e.stopPropagation()}>
+            Live coach
+          </button>
+          <button type="button" className="top-link" onClick={onRestart} onPointerDown={(e) => e.stopPropagation()}>
+            Start over
+          </button>
+        </div>
       </div>
 
       <div
@@ -755,6 +818,15 @@ function LooksStage({
 
       <div className="look-meta" aria-live="polite">
         <p className="role-tagline">{ROLE_TAGLINE[(current?.role ?? "anchor") as Look["role"]]}</p>
+        <button
+          type="button"
+          className="top-link teach-look"
+          onClick={() => onTeachRole(current?.role ?? "anchor")}
+          onPointerDown={(e) => e.stopPropagation()}
+          aria-label={`Teach this ${ROLE_LABEL[current?.role ?? "anchor"]} look`}
+        >
+          Teach this look
+        </button>
         <div className="page-dots" aria-hidden>
           {[0, 1, 2].map((i) => (
             <button
@@ -931,7 +1003,17 @@ const SHAPE_WORD: Record<string, string> = {
   rectangle: "rectangle", invTriangle: "inverted triangle", long: "long",
 };
 
-function LiveCoachStage({ onExit }: { onExit: () => void }) {
+function LiveCoachStage({
+  onExit,
+  onLooks,
+  focusRole = null,
+  canOpenLooks = false,
+}: {
+  onExit: () => void;
+  onLooks: () => void;
+  focusRole?: TeachRole | null;
+  canOpenLooks?: boolean;
+}) {
   const cam = useCamera();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [state, setState] = useState<LiveContourState | null>(null);
@@ -945,10 +1027,11 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
   sweepingRef.current = sweeping;
   const [sweepState, setSweepState] = useState<SweepState | null>(null);
   const [sweepDone, setSweepDone] = useState(false);
-  const lesson = useMemo(
-    () => resolveGuideLesson(guideLesson, state?.shape),
-    [guideLesson, state?.shape],
-  );
+  const lesson = useMemo(() => {
+    const live = resolveGuideLesson(guideLesson, state?.shape);
+    if (guideLesson || !focusRole || !state?.shape) return live;
+    return lessonForRole(state.shape, focusRole);
+  }, [guideLesson, state?.shape, focusRole]);
   const guided = guideIdx !== null && lesson.length > 0;
   const step: LessonStep | null = guided ? lesson[Math.min(guideIdx, lesson.length - 1)]! : null;
 
@@ -962,11 +1045,32 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
     return () => clearInterval(iv);
   }, [guided, guideIdx]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const focusStopped = useRef(false);
+  const focusShape = useRef<string | null>(null);
   const endGuide = () => {
+    focusStopped.current = true;
     handleRef.current?.setGuide(null);
     setGuideIdx(null);
     setGuideLesson(null);
   };
+  // Open the role's lesson once a shape is published. Refresh it if the
+  // shape settles before she advances; Stop and Done do not restart it.
+  useEffect(() => {
+    const action = focusGuideAction({
+      focusRole,
+      stopped: focusStopped.current,
+      shape: state?.shape,
+      guideIdx,
+      openedShape: focusShape.current,
+    });
+    if (action !== "open" || !focusRole || !state?.shape) return;
+    const steps = lessonForRole(state.shape, focusRole);
+    if (!steps.length) return;
+    focusShape.current = state.shape;
+    setGuideLesson(steps);
+    setGuideIdx(0);
+    handleRef.current?.setGuide(steps[0] ?? null);
+  }, [focusRole, state?.shape, guideIdx]);
   const startGuide = () => {
     if (!lesson.length) return;
     setGuideLesson(lesson.slice());
@@ -1009,8 +1113,13 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
 
   const shapeWord = state ? (SHAPE_WORD[state.shape] ?? state.shape) : "…";
 
+  const roleWord = focusRole ? ROLE_LABEL[focusRole] : null;
+
   return (
     <section className="stage stage-coach fade-in" aria-label="Live contour coach">
+      {cam.state !== "denied" && (
+        <button type="button" className="top-link coach-back" onClick={onExit}>Back</button>
+      )}
       <div className="camera-media coach-live">
         <video ref={cam.videoRef} playsInline muted aria-label="Front camera preview" />
         <canvas ref={canvasRef} className="coach-canvas" aria-hidden />
@@ -1020,7 +1129,8 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
             <p className="denied-title display">The mirror needs your camera.</p>
             <p className="cam-note">Allow camera access to see where the light goes.</p>
             <button className="btn btn-primary" onClick={() => void cam.start()}>Try again</button>
-            <button className="btn btn-ghost" onClick={onExit}>Back</button>
+            {canOpenLooks && <button type="button" className="btn btn-ghost" onClick={onLooks}>Looks demo</button>}
+            <button type="button" className="btn btn-ghost" onClick={onExit}>Back</button>
           </div>
         )}
       </div>
@@ -1074,7 +1184,7 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
           )}
           {guided && step && (
             <div className="lesson-card" role="region" aria-label="Makeup step">
-              <p className="lesson-count">Step {guideIdx + 1} of {lesson.length} · {step.title}</p>
+              <p className="lesson-count">{roleWord ? `${roleWord} · ` : ""}Step {(guideIdx ?? 0) + 1} of {lesson.length} · {step.title}</p>
               <p className="lesson-instruction">{step.instruction}</p>
               <p className="lesson-tool">{step.tool}</p>
               {grade && (
@@ -1109,9 +1219,11 @@ function LiveCoachStage({ onExit }: { onExit: () => void }) {
                 {label}
               </button>
             ))}
-            <button className="mini-chip" onClick={onExit}>Looks demo</button>
           </div>
           )}
+          <div className="coach-live-actions">
+            <button type="button" className="mini-chip" onClick={onLooks}>Looks demo</button>
+          </div>
         </div>
       )}
     </section>

@@ -10,8 +10,12 @@ import {
   STROKE_SAMPLES,
   TEACHING_GREY,
   YAW_FRONTAL_DEG,
+  YAW_RIBBON_MAX_DEG,
   brushProgress,
   buildLesson,
+  focusGuideAction,
+  lessonForRole,
+  cheekPlacementFault,
   contourRibbonsForShape,
   faceYawDeg,
   freshShapeStreak,
@@ -22,6 +26,7 @@ import {
   ribbonVisible,
   strokeAlphas,
   syncShapeStreak,
+  type CheekPlacement,
   type LessonStep,
   type ShapeStreak,
 } from "./liveContour.ts";
@@ -136,6 +141,45 @@ test("holdShape leaves the streak argument unchanged", () => {
   holdShape("oval", "pear", streak);
   holdShape("oval", null, streak);
   assert.deepEqual(streak, { pending: "pear", count: 2 });
+});
+
+test("Teach this look opens once a shape exists and does not restart after Stop", () => {
+  assert.equal(focusGuideAction({
+    focusRole: "lift", stopped: false, shape: null, guideIdx: null, openedShape: null,
+  }), "wait");
+  assert.equal(focusGuideAction({
+    focusRole: "lift", stopped: false, shape: "oval", guideIdx: null, openedShape: null,
+  }), "open");
+  assert.equal(focusGuideAction({
+    focusRole: "lift", stopped: false, shape: "oval", guideIdx: 0, openedShape: "oval",
+  }), "keep");
+  assert.equal(focusGuideAction({
+    focusRole: "lift", stopped: false, shape: "pear", guideIdx: 0, openedShape: "oval",
+  }), "open");
+  assert.equal(focusGuideAction({
+    focusRole: "statement", stopped: false, shape: "pear", guideIdx: 2, openedShape: "oval",
+  }), "keep");
+  assert.equal(focusGuideAction({
+    focusRole: "anchor", stopped: true, shape: "oval", guideIdx: null, openedShape: "oval",
+  }), "wait");
+  assert.equal(focusGuideAction({
+    focusRole: null, stopped: false, shape: "oval", guideIdx: null, openedShape: null,
+  }), "wait");
+});
+
+test("Teach this look narrows the lesson to the role and keeps the order", () => {
+  const full = buildLesson("oval");
+  const anchor = lessonForRole("oval", "anchor");
+  const lift = lessonForRole("oval", "lift");
+  const statement = lessonForRole("oval", "statement");
+  assert.ok(anchor.length > 0);
+  assert.ok(anchor.every((s) => s.layer === "contour"));
+  assert.ok(lift.every((s) => s.layer !== "highlight"));
+  assert.ok(lift.some((s) => s.layer === "blush"));
+  assert.deepEqual(statement, full);
+  assert.ok(anchor.length < lift.length);
+  assert.ok(lift.length < statement.length);
+  assert.deepEqual(lessonForRole("not-a-shape", "statement"), buildLesson("oval"));
 });
 
 test("startGuide snapshot stays stable across a shape change and finishSweep", () => {
@@ -273,6 +317,77 @@ test("a bad centroid stays hidden and a non-finite yaw does not occlude", () => 
   assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, Number.NaN, 0.5), true);
   assert.equal(ribbonVisible({ x: 0.9, y: 0.5 }, Number.NaN, 0.5), true);
   assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, 30, Number.NaN), false);
+});
+
+test("profile yaw hides both sides and the near side still paints just under the cutoff", () => {
+  assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, YAW_RIBBON_MAX_DEG, 0.5), false);
+  assert.equal(ribbonVisible({ x: 0.8, y: 0.5 }, -YAW_RIBBON_MAX_DEG, 0.5), false);
+  assert.equal(ribbonVisible({ x: 0.2, y: 0.5 }, YAW_RIBBON_MAX_DEG - 0.001, 0.2), true);
+  assert.ok(YAW_RIBBON_MAX_DEG > YAW_FRONTAL_DEG);
+});
+
+test("stock-clip ratios: an ear-anchored yawed shelf fails and the medialized shelf passes", () => {
+  const span = 0.1012;
+  const before: CheekPlacement = {
+    id: "cheek_shelf_R",
+    visible: true,
+    centroid: { x: 0.5716, y: 0.4933 },
+    lineStart: { x: 0.6659, y: 0.4678 },
+    hollow: { x: 0.5823, y: 0.5249 },
+    ear: { x: 0.6659, y: 0.4678 },
+    hollowDist: 0.0334,
+    earDist: 0.0977,
+    startEarDist: 0,
+    span,
+  };
+  assert.equal(typeof cheekPlacementFault(before, true), "string");
+  assert.equal(cheekPlacementFault(before, false), null);
+  const after: CheekPlacement = {
+    ...before,
+    centroid: { x: 0.5507, y: 0.5345 },
+    lineStart: { x: 0.5966, y: 0.5008 },
+    hollowDist: 0.033,
+    earDist: 0.1331,
+    startEarDist: 0.0768,
+  };
+  assert.equal(cheekPlacementFault(after, true), null);
+});
+
+test("cheek shelf on the hollow passes; the ear floor applies only on yawed frames", () => {
+  const hollow = { x: 0.4, y: 0.58 };
+  const ear = { x: 0.18, y: 0.48 };
+  const span = Math.hypot(hollow.x - ear.x, hollow.y - ear.y);
+  const onHollow: CheekPlacement = {
+    id: "cheek_shelf_L",
+    visible: true,
+    centroid: hollow,
+    lineStart: { x: 0.28, y: 0.52 },
+    hollow,
+    ear,
+    hollowDist: span * 0.2,
+    earDist: span * 1.2,
+    startEarDist: span * 0.4,
+    span,
+  };
+  assert.equal(cheekPlacementFault(onHollow, false), null);
+  assert.equal(cheekPlacementFault(onHollow, true), null);
+  const shortOfEar = { ...onHollow, earDist: span * 0.9 };
+  assert.equal(cheekPlacementFault(shortOfEar, false), null);
+  assert.equal(typeof cheekPlacementFault(shortOfEar, true), "string");
+  const stuckOnEar = { ...onHollow, startEarDist: 0 };
+  assert.equal(cheekPlacementFault(stuckOnEar, false), null);
+  assert.equal(typeof cheekPlacementFault(stuckOnEar, true), "string");
+  const onEar: CheekPlacement = {
+    ...onHollow,
+    centroid: ear,
+    hollowDist: span,
+    earDist: 0,
+    startEarDist: 0,
+  };
+  assert.equal(typeof cheekPlacementFault(onEar, false), "string");
+  assert.equal(typeof cheekPlacementFault(onEar, true), "string");
+  assert.equal(cheekPlacementFault({ ...onEar, visible: false }, true), null);
+  assert.equal(cheekPlacementFault({ ...onHollow, hollowDist: null, span: null }, false), "cheek_shelf_L missing hollow reference");
 });
 
 test("brush progress stays in range when the clock is not", () => {

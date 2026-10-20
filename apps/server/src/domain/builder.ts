@@ -133,10 +133,53 @@ const ROLE_INTENSITY: Record<LookRole, number> = {
   statement: 0.92,
 };
 
+const INTENSITY_LO = 0.08;
+const INTENSITY_HI = 1;
+/**
+ * Anchor under the hardest negative vibe. Above the shared floor, so a soft
+ * pair cannot pile Anchor on 0.08 with every other crushed role.
+ */
+const ANCHOR_SOFT_FLOOR = 0.12;
+
+function vibeExtremes(): { hardestDrop: number } {
+  let minMood = 0;
+  let minEvent = 0;
+  for (const v of Object.values(MOOD_VIBES)) minMood = Math.min(minMood, v.intensity ?? 0);
+  for (const v of Object.values(EVENT_VIBES)) minEvent = Math.min(minEvent, v.intensity ?? 0);
+  return { hardestDrop: -(minMood + minEvent) };
+}
+
+/**
+ * Same shift for every role, so the role-table gaps survive.
+ * Negative deltas scale into the drop that leaves anchor at ANCHOR_SOFT_FLOOR.
+ * The hardest pair currently in the mood/event tables is the bottom of that
+ * scale (ponytail: anything past that pair saturates at the same drop).
+ * Positive deltas pass through and still meet the shared ceiling.
+ */
+function vibeShift(delta: number): number {
+  if (!(delta < 0)) return delta;
+  const { hardestDrop } = vibeExtremes();
+  if (!(hardestDrop > 0)) return 0;
+  const maxDrop = ROLE_INTENSITY.anchor - ANCHOR_SOFT_FLOOR;
+  const t = Math.min(1, -delta / hardestDrop);
+  return -maxDrop * t;
+}
+
+/** Intensities for one mood/event. Ordered, and never stacked on the shared floor. */
+export function roleIntensities(mood: Mood, event: Event): Record<LookRole, number> {
+  const delta = (MOOD_VIBES[mood].intensity ?? 0) + (EVENT_VIBES[event].intensity ?? 0);
+  const shift = vibeShift(delta);
+  return {
+    anchor: clamp(ROLE_INTENSITY.anchor + shift, INTENSITY_LO, INTENSITY_HI),
+    lift: clamp(ROLE_INTENSITY.lift + shift, INTENSITY_LO, INTENSITY_HI),
+    statement: clamp(ROLE_INTENSITY.statement + shift, INTENSITY_LO, INTENSITY_HI),
+  };
+}
+
 function resolveVibe(mood: Mood, event: Event, role: LookRole): Vibe {
   const m = MOOD_VIBES[mood];
   const e = EVENT_VIBES[event];
-  const intensity = clamp(ROLE_INTENSITY[role] + (m.intensity ?? 0) + (e.intensity ?? 0), 0.08, 1);
+  const intensity = roleIntensities(mood, event)[role];
   return {
     intensity,
     eye: (m.eye ?? e.eye ?? "natural") as Vibe["eye"],

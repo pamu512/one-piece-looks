@@ -11,7 +11,9 @@ import {
   LIPSHAPES,
   requirePattern,
 } from "../youcam/patterns.js";
-import { buildLooks, oilyRule, seedFrom, type BuildInput } from "./builder.js";
+import { buildLooks, oilyRule, roleIntensities, seedFrom, type BuildInput } from "./builder.js";
+import { faceCardSvg, zoneAlpha } from "../youcam/facecard.js";
+import { readFileSync } from "node:fs";
 import type { VtoEffect } from "../youcam/client.js";
 
 const base: BuildInput = {
@@ -251,6 +253,59 @@ describe("builder: structure invariants", () => {
       expect(looks).toHaveLength(3);
       const first = looks[0]!.chips[0]!;
       expect(first.hex).toBe("#b3122e");
+    }
+  });
+
+  it("Soft x Casual keeps Anchor, Lift, and Statement off the shared floor", () => {
+    const i = roleIntensities("Soft", "Casual");
+    // Before: anchor clamped to 0.08, lift 0.28, statement 0.70.
+    // The vibe shift now scales into the drop that leaves anchor at 0.12,
+    // and the same shift keeps the role-table gaps.
+    expect(i.anchor).toBeCloseTo(0.13875, 5);
+    expect(i.lift).toBeCloseTo(0.45875, 5);
+    expect(i.statement).toBeCloseTo(0.87875, 5);
+    expect(i.anchor).toBeGreaterThan(0.08);
+    expect(i.lift - i.anchor).toBeGreaterThanOrEqual(0.12);
+    expect(i.statement - i.lift).toBeGreaterThanOrEqual(0.12);
+
+    const looks = buildLooks({ ...base, mood: "Soft", event: "Casual" });
+    for (const look of looks) {
+      const lip = effectOf(look.effects, "lip_color") as { palettes: { color: string }[] };
+      expect(lip.palettes[0]!.color).toBe("#b3122e");
+    }
+
+    const score = (role: "anchor" | "lift" | "statement") => {
+      const look = looks.find((l) => l.role === role)!;
+      return look.effects.reduce((sum, e) => {
+        const ci = (e.palettes as { colorIntensity?: number }[] | undefined)?.[0]?.colorIntensity;
+        return sum + zoneAlpha(String(e.category), ci, look.role);
+      }, 0);
+    };
+    const anchor = score("anchor");
+    const lift = score("lift");
+    const statement = score("statement");
+    expect(lift).toBeGreaterThan(anchor);
+    expect(statement).toBeGreaterThan(lift);
+    // eslint-disable-next-line no-console
+    console.log(`Soft x Casual intensity anchor=${i.anchor} lift=${i.lift} statement=${i.statement}`);
+    // eslint-disable-next-line no-console
+    console.log(`Soft x Casual zoneAlpha sum anchor=${anchor.toFixed(3)} lift=${lift.toFixed(3)} statement=${statement.toFixed(3)}`);
+
+    const face = readFileSync(new URL("../../fixtures/face-portrait-test.jpg", import.meta.url)).toString("base64");
+    const svgs = looks.map((look) => faceCardSvg(look.role, look.effects, base.seed, face));
+    expect(new Set(svgs).size).toBe(3);
+  });
+
+  it("every mood/event keeps role intensities strictly ordered", () => {
+    const moods = ["Bitch mode", "Boss", "Demure", "Owning it", "Sexy", "Soft", "Clean", "Main character"] as const;
+    const events = ["Dinner date", "Office", "Casual", "Workout", "Night out", "Wedding guest", "Errands", "Interview"] as const;
+    for (const mood of moods) {
+      for (const event of events) {
+        const i = roleIntensities(mood, event);
+        expect(i.lift - i.anchor, `${mood} x ${event}`).toBeGreaterThanOrEqual(0.12);
+        expect(i.statement - i.lift, `${mood} x ${event}`).toBeGreaterThanOrEqual(0.12);
+        expect(i.anchor, `${mood} x ${event}`).toBeGreaterThan(0.08);
+      }
     }
   });
 
