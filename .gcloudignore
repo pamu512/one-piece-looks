@@ -1,0 +1,18 @@
+# Source-deploy allowlist: only what the Dockerfile COPYs.
+# Keep tight so gcloud doesn't ship demos/, models, and scratch artifacts.
+*
+!package.json
+!package-lock.json
+!tsconfig.base.json
+!apps
+!apps/server
+!apps/client
+!apps/server/**
+!apps/client/**
+node_modules
+apps/server/node_modules
+apps/client/node_modules
+apps/server/dist
+apps/client/dist
+*.tsbuildinfo
+.vite
