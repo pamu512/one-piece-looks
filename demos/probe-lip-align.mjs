@@ -182,6 +182,9 @@ for (const id of FACES) {
   });
 
   await page.goto("http://127.0.0.1:5173", { waitUntil: "domcontentloaded" });
+  // Coach-first boot (pivot 2026-10-11): leave the mirror via Back before shooting.
+  const entry = await page.waitForSelector(".coach-back, .shutter:not([disabled])", { timeout: 20000 });
+  if ((await entry.getAttribute("class"))?.includes("coach-back")) await entry.click();
   await page.waitForSelector(".shutter:not([disabled])");
   await sleep(1200);
   await page.click(".shutter");

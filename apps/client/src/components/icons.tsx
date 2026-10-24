@@ -40,6 +40,24 @@ export function IconVibe({ size = 16 }: { size?: number }) {
   );
 }
 
+export function IconMore({ size = 22 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden focusable="false">
+      <circle cx="5" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.7" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.7" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function IconLayers({ size = 14 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden focusable="false">
+      <path d="M4 6.5h16M4 12h16M4 17.5h10" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 export function IconChevron({ size = 18, dir = "down" }: { size?: number; dir?: "up" | "down" | "left" | "right" }) {
   const rot = { up: 180, down: 0, left: 90, right: -90 }[dir];
   return (

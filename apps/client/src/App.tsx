@@ -15,8 +15,9 @@ import { depthOf } from "./lib/coach/shades.ts";
 import { CoachOverlay } from "./components/coachOverlay";
 import { startLiveContour, resolveGuideLesson, lessonForRole, focusGuideAction, type LiveContourState, type LessonStep, type TeachRole } from "./lib/liveContour.ts";
 import { keepLooksMounted, pageFromStrip, stageAfterCoachBack, stageAfterLooksDemo, stageAfterTeach } from "./lib/stageNav.ts";
+import { receiptChipLabel, receiptRows } from "./lib/receipt.ts";
 import { sweepMarks, sweepProgress, SWEEP_DONE_LINE, SWEEP_FUSED_LINE, type SweepState } from "./lib/faceSweep.ts";
-import { IconChevron, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
+import { IconChevron, IconLayers, IconMore, IconSave, IconShare, IconShuffle, IconVibe } from "./components/icons";
 import {
   CalmError, FaceGuideOverlay, LockRing, PhaseLine, SampleCanvas, ScanLine, looksLikeSkin, useCamera,
   type SampleCanvasHandle, type SamplePoint,
@@ -171,7 +172,8 @@ export default function App() {
     setError(null); setPhase(null); setBusy(false);
     setCoachFocus(null);
     setSession(null);
-    api.createSession().then(setSession).catch(() => undefined);
+    // The lazy session effect re-creates it now that stage != "coach";
+    // an explicit call here would race a second, wasted session.
   };
 
   async function buildLooks(m: Mood, e: Event, toneChoice?: { depth: string; temperature: "warm" | "neutral" | "cool" }, idemKey = newIdemKey()) {
@@ -598,6 +600,8 @@ function LooksStage({
   const [vibeOpen, setVibeOpen] = useState(false);
   const [coachOpen, setCoachOpen] = useState(false);
   const [coachStep, setCoachStep] = useState<number | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [receiptOpen, setReceiptOpen] = useState(false);
   const coachPlan = useMemo(() => {
     if (!faceShape) return null;
     try {
@@ -683,6 +687,10 @@ function LooksStage({
   };
 
   const current = looks?.looks[page];
+  // Receipt rows for the centered look. Real chips only: an empty or
+  // malformed list hides the chip (receiptChipLabel -> null).
+  const receipt = receiptRows(current);
+  const receiptLabel = receiptChipLabel(receipt);
   const [shareCard, setShareCard] = useState<{ url: string; blob: Blob } | null>(null);
   const [shareBusy, setShareBusy] = useState(false);
   const shareShownAt = useRef(0);
@@ -733,13 +741,18 @@ function LooksStage({
     closeSharePreview();
   };
 
-  // Keyboard escape closes the preview.
+  // Keyboard escape closes the preview, the receipt sheet, and the menu.
   useEffect(() => {
-    if (!shareCard) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") closeSharePreview(); };
+    if (!shareCard && !receiptOpen && !menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (shareCard) closeSharePreview();
+      else if (receiptOpen) setReceiptOpen(false);
+      else setMenuOpen(false);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [shareCard]);
+  }, [shareCard, receiptOpen, menuOpen]);
 
   if (!looks) {
     return (
@@ -772,20 +785,55 @@ function LooksStage({
           type="button"
           className="lock-chip"
           onClick={() => setShowHex((v) => !v)}
+          onPointerDown={(e) => e.stopPropagation()}
           aria-pressed={showHex}
           aria-label={`Locked color. Tap to ${showHex ? "hide" : "show"} the hex.`}
         >
           <span className="dot" style={{ background: lock.onFaceHex }} />
           {showHex ? lock.onFaceHex : `Your ${ZONE_WORD[lock.category]}, kept`}
         </button>
-        <Pips step={2} />
-        <div className="top-links">
-          <button type="button" className="top-link" onClick={onOpenCoach} onPointerDown={(e) => e.stopPropagation()}>
-            Live coach
+        <div className="top-menu">
+          <button
+            type="button"
+            className="icon-btn more-btn"
+            onClick={() => setMenuOpen((v) => !v)}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="More options"
+          >
+            <IconMore />
           </button>
-          <button type="button" className="top-link" onClick={onRestart} onPointerDown={(e) => e.stopPropagation()}>
-            Start over
-          </button>
+          {menuOpen && (
+            <>
+              <div
+                className="menu-scrim"
+                onClick={() => setMenuOpen(false)}
+                onPointerDown={(e) => e.stopPropagation()}
+                aria-hidden
+              />
+              <div className="menu-pop" role="menu" aria-label="More options">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  onClick={() => { setMenuOpen(false); onOpenCoach(); }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  Live coach
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="menu-item"
+                  onClick={() => { setMenuOpen(false); onRestart(); }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  Start over
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -818,6 +866,18 @@ function LooksStage({
 
       <div className="look-meta" aria-live="polite">
         <p className="role-tagline">{ROLE_TAGLINE[(current?.role ?? "anchor") as Look["role"]]}</p>
+        {receiptLabel && (
+          <button
+            type="button"
+            className="receipt-chip"
+            onClick={() => setReceiptOpen(true)}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-haspopup="dialog"
+          >
+            <IconLayers />
+            {receiptLabel}
+          </button>
+        )}
         <button
           type="button"
           className="top-link teach-look"
@@ -860,21 +920,30 @@ function LooksStage({
             </button>
           ))}
         </div>
-        <div className="bar-actions">
-          <button className="icon-btn" onClick={openSharePreview} aria-label="Preview and save the share card" disabled={shareBusy}>
-            <IconSave />
-          </button>
-          <button
-            className="icon-btn shuffle-btn"
-            onClick={() => { setShuffleKey((k) => k + 1); onShuffle(); }}
-            disabled={busy || out}
-            aria-label="Shuffle the supporting layers"
-          >
-            <IconShuffle />
-          </button>
-          <button className="icon-btn" onClick={openSharePreview} aria-label="Preview and share your three looks" disabled={shareBusy}>
-            <IconShare />
-          </button>
+        <div className="bar-actions" role="group" aria-label="Save, shuffle, or share">
+          <div className="act">
+            <button className="icon-btn" onClick={openSharePreview} aria-label="Preview and save the share card" disabled={shareBusy}>
+              <IconSave />
+            </button>
+            <span className="act-label" aria-hidden>Save</span>
+          </div>
+          <div className="act">
+            <button
+              className="icon-btn shuffle-btn"
+              onClick={() => { setShuffleKey((k) => k + 1); onShuffle(); }}
+              disabled={busy || out}
+              aria-label="Shuffle the supporting layers"
+            >
+              <IconShuffle />
+            </button>
+            <span className="act-label" aria-hidden>Shuffle</span>
+          </div>
+          <div className="act">
+            <button className="icon-btn" onClick={openSharePreview} aria-label="Preview and share your three looks" disabled={shareBusy}>
+              <IconShare />
+            </button>
+            <span className="act-label" aria-hidden>Share</span>
+          </div>
         </div>
         <button
           className={`vibe-pill${pairDirty ? " dirty" : ""}`}
@@ -904,8 +973,8 @@ function LooksStage({
 
       {shareCard && (
         <>
-          <div className="sheet-scrim" onClick={closeSharePreview} aria-hidden />
-          <div className="sheet share-sheet" role="dialog" aria-label="Your share card">
+          <div className="sheet-scrim" onClick={closeSharePreview} onPointerDown={(e) => e.stopPropagation()} aria-hidden />
+          <div className="sheet share-sheet" role="dialog" aria-label="Your share card" onPointerDown={(e) => e.stopPropagation()}>
             <div className="sheet-handle" aria-hidden />
             <p className="sheet-title">Your card</p>
             <img src={shareCard.url} alt="Share card: your three looks with the locked swatch" className="share-preview" />
@@ -919,10 +988,41 @@ function LooksStage({
         </>
       )}
 
+      {receiptOpen && receipt.length > 0 && current && (
+        <>
+          <div className="sheet-scrim" onClick={() => setReceiptOpen(false)} onPointerDown={(e) => e.stopPropagation()} aria-hidden />
+          <div className="sheet receipt-sheet" role="dialog" aria-label="What's on" onPointerDown={(e) => e.stopPropagation()}>
+            <div className="sheet-handle" aria-hidden />
+            <p className="sheet-title">What's on</p>
+            <p className="receipt-sub">
+              {ROLE_LABEL[current.role]} · {ROLE_TAGLINE[current.role]}
+            </p>
+            <ul className="receipt-list">
+              {receipt.map((r, i) => (
+                <li key={`${r.label}-${i}`} className="receipt-row">
+                  <span className="receipt-swatch" style={{ background: r.hex }} aria-hidden />
+                  <span className="receipt-names">
+                    <span className="receipt-name">
+                      {r.label}
+                      {r.locked && <> <span className="locked-tag">Locked</span></>}
+                    </span>
+                    <span className="receipt-detail">{r.detail}</span>
+                  </span>
+                  <span className="receipt-hex">{r.hex}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="sheet-actions">
+              <button className="btn btn-ghost" onClick={() => setReceiptOpen(false)}>Back</button>
+            </div>
+          </div>
+        </>
+      )}
+
       {coachOpen && coachPlan && photo && (
         <>
-          <div className="sheet-scrim" onClick={() => setCoachOpen(false)} aria-hidden />
-          <div className="sheet coach-sheet" role="dialog" aria-label="Face map">
+          <div className="sheet-scrim" onClick={() => setCoachOpen(false)} onPointerDown={(e) => e.stopPropagation()} aria-hidden />
+          <div className="sheet coach-sheet" role="dialog" aria-label="Face map" onPointerDown={(e) => e.stopPropagation()}>
             <div className="sheet-handle" aria-hidden />
             <p className="sheet-title">Where it goes</p>
             <div className="coach-map">
@@ -958,8 +1058,8 @@ function LooksStage({
 
       {vibeOpen && (
         <>
-          <div className="sheet-scrim" onClick={() => setVibeOpen(false)} aria-hidden />
-          <div className="sheet" role="dialog" aria-label="Vibe">
+          <div className="sheet-scrim" onClick={() => setVibeOpen(false)} onPointerDown={(e) => e.stopPropagation()} aria-hidden />
+          <div className="sheet" role="dialog" aria-label="Vibe" onPointerDown={(e) => e.stopPropagation()}>
             <div className="sheet-handle" aria-hidden />
             <p className="sheet-title">Dress the moment</p>
             {pairDirty && (
