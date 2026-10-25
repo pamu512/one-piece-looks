@@ -1,24 +1,16 @@
 /**
- * Coach overlay: "show me where" — the plan's zones and ribbons painted on
- * the user's own face photo.
+ * Coach overlay: where each step sits on the user's photo.
  *
- * Geometry: buildContourMap runs in the normalized reference frame (roll
- * rotated horizontal, divided by interocular distance). To draw on the
- * photo we invert: multiply by IOD, rotate by +roll. Step colors come from
- * the plan's shadeHex (server-parity formulas), so what the user sees is
- * what the looks paint.
- *
- * Rendering: each shape paints twice. The pigment polygon carries the
- * shade through a blend mode (multiply for shade depth, soft-light for
- * blush/highlight pigment) and a gaussian feather, so skin texture and
- * luminance read through the color instead of a flat alpha sticker. The
- * guide polygon above it stays a crisp vector outline - the "where" stays
- * legible on top of the soft fill (see lib/coach/fill.ts).
+ * Geometry is buildContourMap in the normalized frame, drawn back through
+ * IOD and roll. Pigment polygons use the step shade, a blend mode, and a
+ * gaussian blur (lib/coach/fill.ts). Guide strokes are a second pass with
+ * no blend and no blur, so the annotation stays a crisp vector. Paired
+ * zone stems (cheek_apple) resolve to the _L/_R polygons.
  */
 
 import { useMemo } from "react";
 import { buildContourMap, type ZoneOrRibbon, type Pt } from "../lib/coach/zones.ts";
-import { VERB_FILL, blendForVerb, charRadiusIod, featherSigmaVb, type FillBlend } from "../lib/coach/fill.ts";
+import { pointsAttr, zoneLayers } from "../lib/coach/fill.ts";
 import { normalizeFace } from "../lib/coach/measure.ts";
 import { lastMeshPoints } from "../lib/faceMesh.ts";
 import type { CoachStep } from "../lib/coach/plan.ts";
@@ -36,18 +28,23 @@ interface Props {
 }
 
 export function CoachOverlay({ photo, steps, activeStep }: Props) {
+  const raw = lastMeshPoints();
   const map = useMemo(() => {
-    const raw = lastMeshPoints();
     if (!raw || raw.length < 468) return null;
-    const norm = normalizeFace(raw);
-    if (!norm) return null;
-    return { norm, cm: buildContourMap(norm) };
-  }, []);
+    try {
+      const norm = normalizeFace(raw);
+      if (!norm) return null;
+      return { norm, cm: buildContourMap(norm) };
+    } catch {
+      // buildContourMap throws when a landmark the hull needs is missing.
+      return null;
+    }
+  }, [raw]);
 
-  if (!map) {
+  if (!map || typeof photo !== "string" || photo.length === 0) {
     return (
       <div className="coach-overlay-empty">
-        <p>Face map needs a frontal photo — retake facing the mirror.</p>
+        <p>Face map needs a frontal photo. Retake facing the mirror.</p>
       </div>
     );
   }
@@ -64,44 +61,41 @@ export function CoachOverlay({ photo, steps, activeStep }: Props) {
     const sy = q.y * norm.iod;
     return { x: sx * cos - sy * sin, y: sx * sin + sy * cos };
   };
-  const poly = (pts: readonly Pt[]) =>
-    pts.map((q) => {
-      const f = toFrame(q);
-      return `${(f.x * VB_W).toFixed(1)},${(f.y * VB_H).toFixed(1)}`;
-    }).join(" ");
-
-  const shown = activeStep === null ? steps : [steps[activeStep]!].filter(Boolean);
-  const byId = new Map<string, { fill: string; op: number; blend: FillBlend }>();
-  for (const [si, s] of shown.entries()) {
-    const op = VERB_FILL[s.verb] ?? 0.45;
-    for (const id of s.zoneIds) {
-      if (!byId.has(id)) byId.set(id, { fill: s.shadeHex, op: op * (activeStep === null ? 0.7 : 1), blend: blendForVerb(s.verb) });
-    }
-    void si;
-  }
-
   const shapes = [...cm.zones, ...cm.ribbons] as ZoneOrRibbon[];
+  const shapeById = new Map(shapes.map((z) => [z.id, z]));
+  const shown = activeStep === null ? steps : steps[activeStep] ? [steps[activeStep]!] : [];
+  const { pigments, guides } = zoneLayers(shown, shapes, norm.iod, VB_W, activeStep === null);
+
+  const pointsFor = (id: string): string | null => {
+    const z = shapeById.get(id);
+    if (!z) return null;
+    return pointsAttr(z.poly.map((q) => {
+      const f = toFrame(q);
+      return { x: f.x * VB_W, y: f.y * VB_H };
+    }));
+  };
+
   return (
     <svg viewBox={`0 0 ${VB_W} ${VB_H}`} className="coach-overlay" role="img"
       aria-label="Face map showing where each step applies">
       <image href={photo} x={0} y={0} width={VB_W} height={VB_H} preserveAspectRatio="xMidYMid slice" />
-      {shapes
-        .filter((z) => byId.has(z.id))
-        .map((z) => {
-          const style = byId.get(z.id)!;
-          // Gaussian feather from the shape's own size: the soft edge a
-          // brush leaves, scaled with the zone (never a hard die-cut).
-          const sigma = featherSigmaVb(charRadiusIod(z), norm.iod, VB_W);
-          return (
-            <g key={z.id}>
-              <polygon className="zone-pigment" data-zone={z.id} data-blend={style.blend}
-                points={poly(z.poly)} fill={style.fill} fillOpacity={style.op}
-                style={{ mixBlendMode: style.blend, filter: `blur(${sigma.toFixed(1)}px)` }} />
-              <polygon className="zone-guide" data-zone={z.id} points={poly(z.poly)}
-                fill="none" stroke={style.fill} strokeWidth={2.5} strokeOpacity={0.85} />
-            </g>
-          );
-        })}
+      {pigments.map((p, i) => {
+        const points = pointsFor(p.zoneId);
+        if (!points) return null;
+        return (
+          <polygon key={`${p.zoneId}:${i}`} className="zone-pigment" data-zone={p.zoneId} data-blend={p.blend}
+            points={points} fill={p.fill} fillOpacity={p.opacity}
+            style={{ mixBlendMode: p.blend, filter: `blur(${p.sigma.toFixed(1)}px)` }} />
+        );
+      })}
+      {guides.map((g) => {
+        const points = pointsFor(g.zoneId);
+        if (!points) return null;
+        return (
+          <polygon key={`guide:${g.zoneId}`} className="zone-guide" data-zone={g.zoneId}
+            points={points} fill="none" stroke={g.stroke} strokeWidth={2.5} strokeOpacity={0.85} />
+        );
+      })}
     </svg>
   );
 }

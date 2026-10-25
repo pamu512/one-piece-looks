@@ -43,6 +43,130 @@ export function blendForVerb(verb: string): FillBlend {
   return verb === "contour" || verb === "define" ? "multiply" : "soft-light";
 }
 
+/** Used when a step verb has no entry in VERB_FILL. */
+export const FILL_OPACITY_FALLBACK = 0.45;
+
+/**
+ * All-steps view stacks every layer on the photo, so each one is pulled back.
+ * A single step keeps the verb strength.
+ */
+export const ALL_STEPS_GAIN = 0.7;
+
+const PAINT_HEX = /^#[0-9a-fA-F]{6}$/;
+
+/** Verb strength in (0, 1]. Unknown or non-finite verbs use the fallback. */
+export function fillOpacity(verb: string): number {
+  const op = VERB_FILL[verb];
+  if (typeof op !== "number" || !Number.isFinite(op) || op <= 0 || op > 1) return FILL_OPACITY_FALLBACK;
+  return op;
+}
+
+/** #RRGGBB, or null when the shade cannot be painted. */
+export function paintHex(hex: unknown): string | null {
+  if (typeof hex !== "string" || !PAINT_HEX.test(hex.trim())) return null;
+  return hex.trim().toLowerCase();
+}
+
+/**
+ * Rules name a stem (`cheek_apple`). The contour map stores `cheek_apple_L`
+ * and `cheek_apple_R`. An id that already exists is used as-is.
+ */
+export function resolvePaintIds(id: string, known: ReadonlySet<string>): string[] {
+  if (typeof id !== "string" || id.length === 0) return [];
+  if (known.has(id)) return [id];
+  const out: string[] = [];
+  if (known.has(`${id}_L`)) out.push(`${id}_L`);
+  if (known.has(`${id}_R`)) out.push(`${id}_R`);
+  return out;
+}
+
+export interface PaintStep {
+  verb?: unknown;
+  shadeHex?: unknown;
+  zoneIds?: unknown;
+}
+
+export interface PaintShape {
+  id: string;
+  kind?: unknown;
+  radiusIod?: unknown;
+  widthMaxIod?: unknown;
+}
+
+export interface PigmentLayer {
+  zoneId: string;
+  fill: string;
+  opacity: number;
+  blend: FillBlend;
+  sigma: number;
+}
+
+export interface GuideLayer {
+  zoneId: string;
+  stroke: string;
+}
+
+/**
+ * Pigment layers in step order (later steps stack; a shared zone is not dropped).
+ * Guides are one per zone, stroked with the last step that painted it, and
+ * carry no blend: the caller draws them after every pigment.
+ * A bad hex, a missing zone list, or an unknown id paints nothing for that entry.
+ */
+export function zoneLayers(
+  steps: readonly PaintStep[] | null | undefined,
+  shapes: readonly PaintShape[],
+  iod: number,
+  vbW: number,
+  allSteps: boolean,
+): { pigments: PigmentLayer[]; guides: GuideLayer[] } {
+  const known = new Set(shapes.map((s) => s.id));
+  const byShape = new Map(shapes.map((s) => [s.id, s]));
+  const pigments: PigmentLayer[] = [];
+  const guideStroke = new Map<string, string>();
+  const gain = allSteps ? ALL_STEPS_GAIN : 1;
+  for (const s of Array.isArray(steps) ? steps : []) {
+    if (!s || typeof s !== "object") continue;
+    const hex = paintHex(s.shadeHex);
+    if (!hex) continue;
+    const verb = typeof s.verb === "string" ? s.verb : "";
+    const opacity = Math.min(1, fillOpacity(verb) * gain);
+    const blend = blendForVerb(verb);
+    const rawIds = Array.isArray(s.zoneIds) ? s.zoneIds : [];
+    const painted = new Set<string>();
+    for (const raw of rawIds) {
+      if (typeof raw !== "string") continue;
+      for (const zoneId of resolvePaintIds(raw, known)) {
+        if (painted.has(zoneId)) continue;
+        painted.add(zoneId);
+        const shape = byShape.get(zoneId);
+        if (!shape) continue;
+        pigments.push({
+          zoneId,
+          fill: hex,
+          opacity,
+          blend,
+          sigma: featherSigmaVb(charRadiusIod(shape), iod, vbW),
+        });
+        guideStroke.set(zoneId, hex);
+      }
+    }
+  }
+  const guides: GuideLayer[] = [];
+  for (const [zoneId, stroke] of guideStroke) guides.push({ zoneId, stroke });
+  return { pigments, guides };
+}
+
+/** SVG points string. Fewer than 3 vertices, or any non-finite coordinate, paints nothing. */
+export function pointsAttr(coords: readonly { x: number; y: number }[]): string | null {
+  if (coords.length < 3) return null;
+  const parts: string[] = [];
+  for (const p of coords) {
+    if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+    parts.push(`${p.x.toFixed(1)},${p.y.toFixed(1)}`);
+  }
+  return parts.join(" ");
+}
+
 /** Gaussian feather sigma as a fraction of the shape's characteristic radius. */
 export const FEATHER_FRACTION = 0.3;
 
