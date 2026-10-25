@@ -332,7 +332,8 @@ async function zoneSamples(p) {
         const ctx = c.getContext("2d");
         ctx.drawImage(bmp, 0, 0, S, S);
         const d = ctx.getImageData(0, 0, S, S).data;
-        alphaAt = (u, v) => d[((v * S) | 0) * S + ((u * S) | 0) * 4 + 3] / 255;
+        // byte index (row * S + col) * 4 + 3 - alpha of pixel (col, row)
+        alphaAt = (u, v) => d[(((v * S) | 0) * S + ((u * S) | 0)) * 4 + 3] / 255;
       } catch {
         continue; // undecodable mask: zone drops out of the A/B
       }

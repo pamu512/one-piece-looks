@@ -3,10 +3,11 @@
  *
  * Geometry is buildContourMap in the normalized frame, drawn back through
  * IOD and roll. Pigment polygons use the step shade, a blend mode, and a
- * gaussian feather (lib/coach/fill.ts); once the bisenet parse lands they
- * are additionally clipped by a soft mask (lib/coach/softMask.ts) so
- * pigment follows skin and stops at hair and background - the mask
- * carries the feather then, so the softness is not doubled. Guide strokes
+ * gaussian feather (lib/coach/fill.ts); when the bisenet parse is
+ * available they are additionally clipped by a soft mask
+ * (lib/coach/softMask.ts) so pigment follows skin and stops at hair and
+ * background - the mask carries the feather then, so the softness is not
+ * doubled. Guide strokes
  * are a second pass with no blend and no blur, so the annotation stays a
  * crisp vector. Paired zone stems (cheek_apple) resolve to the _L/_R
  * polygons.

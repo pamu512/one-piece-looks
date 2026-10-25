@@ -57,7 +57,7 @@ let ortTail: Promise<void> = Promise.resolve();
 
 /**
  * The wasm EP is one runtime. Overlapping session.run calls corrupt it,
- * so the face-frame session and the lip-parse session share this queue.
+ * so the face-frame session and the face-parse session share this queue.
  */
 export function withOrtLock<T>(job: () => Promise<T>): Promise<T> {
   const prev = ortTail;

@@ -15,6 +15,7 @@ import {
   SKIN_GATE,
   blurPlane,
   buildMaskKit,
+  featherFilter,
   gateForZone,
   lipGate,
   maskAlpha,
@@ -156,6 +157,18 @@ test("mask alpha is finite on broken planes (paint nothing, never NaN)", () => {
   for (const a of out) assert.ok(Number.isFinite(a) && a >= 0 && a <= 1);
   assert.equal(out[0], 0, "NaN skin probability must not paint");
   assert.equal(out[1], 0, "NaN occlusion must not paint");
+});
+
+test("featherFilter passes the step-2 sigma band through, clamps the rest", () => {
+  // viewBox sigmas are clamped to [2.5, 30]; on the 512 grid via S / vbW
+  // that band is ~[1.28, 15.36] px - always a blur in practice.
+  assert.equal(featherFilter(Number.NaN), null);
+  assert.equal(featherFilter(0), null);
+  assert.equal(featherFilter(0.05), null, "at the cutoff: no blur");
+  assert.equal(featherFilter(0.051), "blur(0.05px)");
+  assert.equal(featherFilter(2.5 * (512 / 1000)), "blur(1.28px)", "FEATHER_MIN_VB on the parse grid");
+  assert.equal(featherFilter(30 * (512 / 1000)), "blur(15.36px)", "FEATHER_MAX_VB on the parse grid");
+  assert.equal(featherFilter(Infinity), null);
 });
 
 test("a soft boundary produces intermediate alphas (no argmax cliff)", () => {

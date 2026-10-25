@@ -172,14 +172,27 @@ export function maskAlpha(zoneCoverage: Float32Array, kit: MaskKit, gate: GateKi
 export const MASK_VB_W = 1000;
 
 /**
+ * The canvas 2D filter string that feathers the zone raster on the parse
+ * grid, or null when the sigma is too small to blur. Pure so the boundary
+ * is unit-testable; zoneMaskDataUrl applies it (or falls back).
+ */
+export function featherFilter(sigmaGrid: number): string | null {
+  if (!Number.isFinite(sigmaGrid) || sigmaGrid <= 0.05) return null;
+  return `blur(${sigmaGrid.toFixed(2)}px)`;
+}
+
+/**
  * Rasterize one zone polygon (frame fractions) feathered by its step-2
  * sigma (viewBox units), intersect with the kit gates, and encode an SVG
  * mask image: white, alpha = mask value (an SVG mask's value is luminance
  * x alpha, so white with alpha a masks exactly a). The grid is the parse
  * grid: the photo is stretched onto it the same way the face map
  * stretches the photo to its viewBox, so polygon space, mask space, and
- * photo space agree. Null when the DOM is unavailable or the polygon is
- * degenerate - callers render the unmasked step-2 fill.
+ * photo space agree. Null when the DOM is unavailable, the polygon is
+ * degenerate, or canvas filter effects are missing (Safari before 18
+ * ignores ctx.filter, so the raster would carry a hard polygon edge on
+ * clear skin - below the step-2 feather bar) - callers render the
+ * unmasked step-2 fill.
  */
 export function zoneMaskDataUrl(
   poly: readonly { x: number; y: number }[],
@@ -196,8 +209,9 @@ export function zoneMaskDataUrl(
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return null;
 
-  const sigma = sigmaVb * (S / vbW);
-  ctx.filter = Number.isFinite(sigma) && sigma > 0.05 ? `blur(${sigma.toFixed(2)}px)` : "none";
+  const spec = featherFilter(sigmaVb * (S / vbW));
+  if (spec && !("filter" in ctx)) return null; // no canvas filters: no feather
+  ctx.filter = spec ?? "none";
   ctx.fillStyle = "#ffffff";
   ctx.beginPath();
   for (let i = 0; i < poly.length; i++) {
@@ -208,7 +222,7 @@ export function zoneMaskDataUrl(
   }
   ctx.closePath();
   ctx.fill();
-  ctx.filter = "none";
+  if (spec) ctx.filter = "none";
 
   let img: ImageData;
   try {
