@@ -17,11 +17,17 @@ arcs, face oval, cheek anchors.
    selfie-biased subset) - box only, refines the mesh fallback path.
 3. Redness-heuristic lip + skin-grid box - dependency-free floor, no model.
 
-## BiSeNet face-parsing weights (REMOVED 2026-10-09)
+## BiSeNet face-parsing weights
 
-The app previously shipped `face-parse-bisenet-512-int8.onnx` (BiSeNet
-weights trained on CelebAMask-HQ). That dataset agreement is non-commercial
-research only. The MediaPipe mesh supersedes it on every probed face, so the
-weights, the parser module, and its tests were removed. They survive in git
-history (commit 37390b2 and earlier) if they are ever needed for a
-non-commercial context.
+`apps/client/public/models/zll-bisenet-512-int8.onnx` is the zll-bisenet
+resnet18 face parser (int8 ONNX, 19 classes), trained on CelebAMask-HQ
+via face-makeup.PyTorch's released checkpoint `cp/79999_iter.pth`. The
+CelebAMask-HQ dataset agreement is non-commercial research only, so these
+weights carry that restriction with them.
+
+History: shipped once, then removed 2026-10-09 (commit fa8099f) as a
+non-commercial artifact; re-added 2026-10-25 for the coach face map's
+soft pigment masks (plan phase 2 step 3) - a recorded decision to accept
+the restriction for this project. If that no longer holds, delete the
+model and the face map falls back to its polygon fills automatically;
+`lib/faceParse.ts`, `lib/coach/softMask.ts`, and their tests go with it.

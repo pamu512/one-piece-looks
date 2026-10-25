@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
- * Soft-fill probe (plan phase 2 step 2, 2026-10-25): the coach face map's
- * zone fills must stop reading as flat alpha stickers.
+ * Soft-fill probe (plan phase 2 steps 2 + 3, 2026-10-25): the coach face
+ * map's zone fills must stop reading as flat alpha stickers (step 2) and
+ * must stop painting hair and background (step 3).
  *
  * Drives the real client headlessly (fake-camera face, mock server behind
  * vite), opens the Face map sheet, and measures one blush zone and one
@@ -17,9 +18,28 @@
  *            (multiply), mean luma delta < -3: pigment present, depth
  *            darker, never invisible.
  *
+ * Soft-mask gates (step 3) - the default build clips every pigment
+ * polygon with a bisenet soft mask (skin probability x hair/bg
+ * occlusion); ?softmasks=0 on the same build reproduces the step-2
+ * geometry-only fill, so the A/B isolates the mask itself. Runs on the
+ * tan diamond face, whose temple contour ribbons sit under real hair:
+ *
+ *   masks-present  pigment polygons carry SVG masks whose images decode
+ *                  with real alpha (ORT runtime + model + parse all ran
+ *                  in this browser). Gate.
+ *   hair-drop      on the most hair-suppressed zone (lowest mean mask
+ *                  alpha among zones that carried pigment unmasked),
+ *                  mean |dRGB| over the zone interior drops to <= 60%
+ *                  of the unmasked build's value - no hair glow-through.
+ *                  Gate.
+ *   skin-keep      the least-suppressed pigmented zone keeps its pigment
+ *                  (|dRGB| >= 4 and >= 60% of unmasked): the mask
+ *                  suppressed hair, not the step-2 look. Gate.
+ *
  * Writes OUT/{bare,warm,define}.png, OUT/side-by-side.png (bare | after),
- * and OUT/results.json. Set BEFORE=path/to/results.json to also print the
- * before -> after deltas. GATE=1 exits nonzero when a gate fails.
+ * OUT/{all-tan-masked,all-tan-unmasked,bare-tan}.png, and OUT/results.json.
+ * Set BEFORE=path/to/results.json to also print the before -> after
+ * deltas. GATE=1 exits nonzero when a gate fails.
  *
  * Usage: node demos/probe-soft-fills.mjs
  * Needs: mock server :8787, vite :5173 (same stack pixel-gates.sh boots).
@@ -36,6 +56,8 @@ const BASE = "http://127.0.0.1:5173";
 // (blonde -> pear yaw 0.004, tan -> diamond yaw 0.001) where the portrait
 // fixtures sit just over the gate and never reach the face map.
 const FACE = process.env.FACE ? join(ROOT, process.env.FACE) : join(ROOT, "demos/.mask-qa/faces/face-c-blonde.png");
+// Step-3 A/B face: diamond -> temple ribbons run under real hair.
+const TAN_FACE = process.env.TAN_FACE ? join(ROOT, process.env.TAN_FACE) : join(ROOT, "demos/.mask-qa/faces/face-d-tan.png");
 const GATE = process.env.GATE === "1";
 const BEFORE = process.env.BEFORE && existsSync(process.env.BEFORE)
   ? JSON.parse(readFileSync(process.env.BEFORE, "utf8"))
@@ -43,7 +65,7 @@ const BEFORE = process.env.BEFORE && existsSync(process.env.BEFORE)
 mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const results = { url: BASE, face: FACE, shape: null, zones: {}, gate: GATE, pass: [] };
+const results = { url: BASE, face: FACE, shape: null, zones: {}, softMask: null, gate: GATE, pass: [] };
 function record(id, pass, detail) {
   results.pass.push({ id, pass });
   console.log(`${pass ? "PASS" : (GATE ? "FAIL" : "INFO")}  ${id}  ${detail}`);
@@ -110,59 +132,70 @@ function edgeWidthPx(filled, bare, cx, cy, r) {
 }
 
 const faceB64 = readFileSync(FACE).toString("base64");
+const tanB64 = readFileSync(TAN_FACE).toString("base64");
 const browser = await chromium.launch({ headless: true });
-const context = await browser.newContext({
-  viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, permissions: ["camera"],
-});
-const page = await context.newPage();
-page.setDefaultTimeout(60000);
-await page.addInitScript((faceDataUrl) => {
-  let track = null;
-  navigator.mediaDevices.getUserMedia = async () => {
-    if (!track) {
-      const img = new Image();
-      img.src = faceDataUrl;
-      await new Promise((r) => { img.onload = r; img.onerror = r; });
-      const c = document.createElement("canvas");
-      c.width = 480; c.height = 640;
-      const ctx = c.getContext("2d");
-      ctx.fillStyle = "#101014";
-      ctx.fillRect(0, 0, 480, 640);
-      const ar = img.naturalWidth / img.naturalHeight, tar = 480 / 640;
-      let sw = img.naturalWidth, sh = img.naturalHeight;
-      if (ar > tar) sw = sh * tar; else sh = sw / tar;
-      ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, 480, 640);
-      track = c.captureStream(12).getVideoTracks()[0];
-    }
-    return new MediaStream([track.clone()]);
-  };
-}, "data:image/png;base64," + faceB64);
 
-await page.goto(BASE, { waitUntil: "domcontentloaded" });
-const entry = await page.waitForSelector(".coach-back, .shutter:not([disabled])");
-if ((await entry.getAttribute("class"))?.includes("coach-back")) await entry.click();
-await page.waitForSelector(".shutter:not([disabled])");
-await sleep(1200);
-await page.click(".shutter");
-await page.waitForSelector(".lock-ring");
-await page.waitForFunction(() => {
-  const b = [...document.querySelectorAll("button")].find((x) => /See my three looks/i.test(x.textContent || ""));
-  return b && !b.disabled;
-});
-await sleep(400);
-await page.click("text=/See my three looks/i");
-await page.waitForSelector(".look-frame img:not(.bare-img)");
-await sleep(1500);
-await page.click(".coach-pill");
-await page.waitForSelector(".coach-map svg polygon");
-await sleep(600);
+/**
+ * One driven session: fake-camera context on `face`, app at `url`,
+ * through to the face map sheet open. Returns the page.
+ */
+async function drive(url, b64) {
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, permissions: ["camera"],
+  });
+  const p = await context.newPage();
+  p.setDefaultTimeout(60000);
+  await p.addInitScript((faceDataUrl) => {
+    let track = null;
+    navigator.mediaDevices.getUserMedia = async () => {
+      if (!track) {
+        const img = new Image();
+        img.src = faceDataUrl;
+        await new Promise((r) => { img.onload = r; img.onerror = r; });
+        const c = document.createElement("canvas");
+        c.width = 480; c.height = 640;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#101014";
+        ctx.fillRect(0, 0, 480, 640);
+        const ar = img.naturalWidth / img.naturalHeight, tar = 480 / 640;
+        let sw = img.naturalWidth, sh = img.naturalHeight;
+        if (ar > tar) sw = sh * tar; else sh = sw / tar;
+        ctx.drawImage(img, (img.naturalWidth - sw) / 2, (img.naturalHeight - sh) / 2, sw, sh, 0, 0, 480, 640);
+        track = c.captureStream(12).getVideoTracks()[0];
+      }
+      return new MediaStream([track.clone()]);
+    };
+  }, "data:image/png;base64," + b64);
+
+  await p.goto(url, { waitUntil: "domcontentloaded" });
+  const entry = await p.waitForSelector(".coach-back, .shutter:not([disabled])");
+  if ((await entry.getAttribute("class"))?.includes("coach-back")) await entry.click();
+  await p.waitForSelector(".shutter:not([disabled])");
+  await sleep(1200);
+  await p.click(".shutter");
+  await p.waitForSelector(".lock-ring");
+  await p.waitForFunction(() => {
+    const b = [...document.querySelectorAll("button")].find((x) => /See my three looks/i.test(x.textContent || ""));
+    return b && !b.disabled;
+  });
+  await sleep(400);
+  await p.click("text=/See my three looks/i");
+  await p.waitForSelector(".look-frame img:not(.bare-img)");
+  await sleep(1500);
+  await p.click(".coach-pill");
+  await p.waitForSelector(".coach-map svg polygon");
+  await sleep(600);
+  return p;
+}
+
+const page = await drive(BASE, faceB64);
 results.shape = await page.$eval(".coach-sheet .sheet-title, .coach-note", () =>
   document.querySelector(".shape-word, .coach-note")?.textContent?.trim() ?? null).catch(() => null);
 
 /** Filled polygons in doc order: {zone, points in screenshot px, centroid, radius, blend}. */
-async function filledShapes() {
-  const dsf = await page.evaluate(() => window.devicePixelRatio || 1);
-  return page.$$eval(".coach-map svg polygon", (els, dsf) => {
+async function filledShapes(p) {
+  const dsf = await p.evaluate(() => window.devicePixelRatio || 1);
+  return p.$$eval(".coach-map svg polygon", (els, dsf) => {
     const svg = document.querySelector(".coach-map svg");
     const rect = svg.getBoundingClientRect();
     return els.filter((el) => el.getAttribute("fill") !== "none").map((el) => {
@@ -186,8 +219,8 @@ async function filledShapes() {
   }, dsf);
 }
 
-async function shot(path) {
-  await page.locator(".coach-map svg").screenshot({ path });
+async function shot(p, path) {
+  await p.locator(".coach-map svg").screenshot({ path });
   return planes(path);
 }
 
@@ -203,7 +236,7 @@ async function measureChip(chipText, tag, picker) {
   const chip = page.locator(".coach-steps .chip-vibe", { hasText: new RegExp(chipText, "i") }).first();
   await chip.click();
   await sleep(500);
-  const shapes = await filledShapes();
+  const shapes = await filledShapes(page);
   const target = picker(shapes);
   if (!target) { record(`${tag}-present`, false, "no filled polygon found"); return; }
   // Hide the crisp guide outlines for BOTH shots: the edge metric measures
@@ -214,11 +247,11 @@ async function measureChip(chipText, tag, picker) {
       if (p.getAttribute("fill") === "none") p.style.visibility = "hidden";
     });
   });
-  const filled = await shot(join(OUT, `${tag}.png`));
+  const filled = await shot(page, join(OUT, `${tag}.png`));
   await page.evaluate(() => {
     document.querySelectorAll(".coach-map svg polygon").forEach((p) => { p.style.visibility = "hidden"; });
   });
-  const bare = await shot(join(OUT, "bare.png"));
+  const bare = await shot(page, join(OUT, "bare.png"));
   await page.evaluate(() => {
     document.querySelectorAll(".coach-map svg polygon").forEach((p) => { p.style.visibility = ""; });
   });
@@ -226,11 +259,11 @@ async function measureChip(chipText, tag, picker) {
   const tex = textureScore(filled, cx, cy, core) / (textureScore(bare, cx, cy, core) || 1);
   const { dRGB, dL } = coreDelta(filled, bare, cx, cy, core);
   const edge = edgeWidthPx(filled, bare, cx, cy, target.r);
-  results.zones[tag] = { zone: target.zone, blend: target.blend, texture: +tex.toFixed(3), dRGB: +dRGB.toFixed(2), dL: +dL.toFixed(2), edgePx: +edge.toFixed(1), radiusPx: +target.r.toFixed(0), cx: +target.cx.toFixed(1), cy: +target.cy.toFixed(1), rw: +target.rw.toFixed(1) };
+  results.zones[tag] = { zone: target.zone, blend: target.blend, texture: +tex.toFixed(3), dRGB: +dRGB.toFixed(2), dL: +dL.toFixed(2), edgePx: +edge.toFixed(1), radiusPx: +target.r.toFixed(0), cx: +cx.toFixed(1), cy: +cy.toFixed(1), rw: +target.rw.toFixed(1) };
   const b = BEFORE?.zones?.[tag];
   const deltaTxt = b ? `  (before: tex ${b.texture}, edge ${b.edgePx}px, dRGB ${b.dRGB})` : "";
   console.log(`INFO  ${tag}  zone=${target.zone ?? "doc-order"} blend=${target.blend ?? "flat-alpha"} tex=${tex.toFixed(3)} edge=${edge.toFixed(1)}px dRGB=${dRGB.toFixed(2)} dL=${dL.toFixed(2)}${deltaTxt}`);
-  return { tex, dRGB, dL, edge };
+  return { tex, dRGB, dL, edge, bare };
 }
 
 const blush = await measureChip("warm", "blush", (s) => pick(s, { zone: "cheek_apple_L" }) ?? s[0] ?? null);
@@ -241,6 +274,164 @@ const contour = await measureChip("define", "contour", (s) =>
   pick(s, { zone: "cheek_shelf_L" }) ?? pick(s, { zone: "temple_L" }) ?? pick(s, { blend: "multiply" }) ?? s[0] ?? null);
 
 await page.screenshot({ path: join(OUT, "coach-sheet.png") });
+
+// ---- soft-mask gates (plan phase 2 step 3) ----
+
+// masks-present: the pigments on THIS page (default face, masks on).
+let maskedPolys = 0;
+try {
+  await page.waitForSelector(".coach-map svg polygon[mask]", { timeout: 45000 });
+  await sleep(300);
+  maskedPolys = await page.$$eval(".coach-map svg polygon[mask]", (els) => els.length);
+} catch {
+  maskedPolys = 0;
+}
+record("masks-present", maskedPolys > 0,
+  `${maskedPolys} pigment polygons carry soft masks (ORT runtime + bisenet model served + parsed)`);
+
+/**
+ * Interior samples for every pigment zone on the All view: a grid of
+ * points inside the polygon (point-in-poly only - ribbons are ~6 px wide
+ * on the 512 mask grid, too thin for clearance discs), with the mask
+ * alpha at each sampled point when the zone carries a mask. Returns
+ * samples in frame fractions plus the svg rect for screenshot-px
+ * conversion.
+ */
+async function zoneSamples(p) {
+  return p.evaluate(async () => {
+    const svg = document.querySelector(".coach-map svg");
+    if (!svg) return null;
+    const rect = svg.getBoundingClientRect();
+    const zones = [];
+    for (const poly of svg.querySelectorAll("polygon[mask]")) {
+      const zone = poly.getAttribute("data-zone") || "";
+      const maskId = (poly.getAttribute("mask") || "").replace(/^url\(#|\)$/g, "");
+      const imgEl = svg.querySelector(`mask[id="${maskId}"] image`);
+      const href = imgEl && (imgEl.getAttribute("href") || imgEl.getAttributeNS("http://www.w3.org/1999/xlink", "href"));
+      if (!href) continue;
+      const pts = (poly.getAttribute("points") || "").trim().split(/\s+/).map((pair) => pair.split(",").map(Number));
+      const inside = (x, y) => {
+        let hit = false;
+        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+          const [xi, yi] = pts[i], [xj, yj] = pts[j];
+          if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+        }
+        return hit;
+      };
+      let alphaAt = null;
+      try {
+        const bmp = await new Promise((res, rej) => {
+          const i = new Image();
+          i.onload = () => res(i);
+          i.onerror = () => rej(new Error("decode"));
+          i.src = href;
+        });
+        const S = bmp.naturalWidth || 512;
+        const c = document.createElement("canvas");
+        c.width = S; c.height = S;
+        const ctx = c.getContext("2d");
+        ctx.drawImage(bmp, 0, 0, S, S);
+        const d = ctx.getImageData(0, 0, S, S).data;
+        alphaAt = (u, v) => d[((v * S) | 0) * S + ((u * S) | 0) * 4 + 3] / 255;
+      } catch {
+        continue; // undecodable mask: zone drops out of the A/B
+      }
+      const S = 512;
+      const samples = [];
+      for (let gy = 6; gy < S - 6; gy += 6) {
+        for (let gx = 6; gx < S - 6; gx += 6) {
+          const u = gx / S, v = gy / S;
+          if (!inside(u * 1000, v * 1250)) continue;
+          samples.push({ u, v, a: alphaAt(u, v) });
+        }
+      }
+      zones.push({ zone, samples });
+    }
+    return { rect: { w: rect.width, h: rect.height }, zones };
+  });
+}
+
+/** Mean |dRGB| (filled vs bare) over a zone's sample points, screenshot px. */
+function zoneDrgb(filled, bare, samples, rect) {
+  let dr = 0, dg = 0, db = 0, n = 0;
+  for (const s of samples) {
+    const x = Math.round(s.u * rect.w * 2);
+    const y = Math.round(s.v * rect.h * 2);
+    if (x < 0 || y < 0 || x >= filled.w || y >= filled.h) continue;
+    const i = (y * filled.w + x) * 3;
+    dr += Math.abs(filled.rgb[i] - bare.rgb[i]);
+    dg += Math.abs(filled.rgb[i + 1] - bare.rgb[i + 1]);
+    db += Math.abs(filled.rgb[i + 2] - bare.rgb[i + 2]);
+    n++;
+  }
+  return n ? (dr + dg + db) / (3 * n) : 0;
+}
+
+// A/B on the tan face: masked build vs ?softmasks=0 (step-2 fills).
+async function tanAllShot(url, outFile, wantMask) {
+  const p = await drive(url, tanB64);
+  if (wantMask) {
+    await p.waitForSelector(".coach-map svg polygon[mask]", { timeout: 45000 }).catch(() => {});
+  }
+  await p.locator(".coach-steps .chip-vibe", { hasText: /^All$/ }).first().click();
+  await sleep(600);
+  await p.evaluate(() => {
+    document.querySelectorAll(".coach-map svg polygon").forEach((el) => {
+      if (el.getAttribute("fill") === "none") el.style.visibility = "hidden";
+    });
+  });
+  const filled = await shot(p, join(OUT, outFile));
+  await p.evaluate(() => {
+    document.querySelectorAll(".coach-map svg polygon").forEach((el) => { el.style.visibility = "hidden"; });
+  });
+  const bare = await shot(p, join(OUT, "bare-tan.png"));
+  await p.evaluate(() => {
+    document.querySelectorAll(".coach-map svg polygon").forEach((el) => { el.style.visibility = ""; });
+  });
+  return { p, filled, bare };
+}
+
+const softMask = { face: TAN_FACE, zones: null };
+if (maskedPolys > 0) {
+  const masked = await tanAllShot(BASE, "all-tan-masked.png", true);
+  const info = await zoneSamples(masked.p).catch(() => null);
+  await masked.p.close();
+
+  const unmasked = await tanAllShot(BASE + "?softmasks=0", "all-tan-unmasked.png", false);
+  await unmasked.p.close();
+
+  if (!info || info.zones.length === 0) {
+    record("hair-drop", false, "no decodable soft masks on the All view");
+  } else {
+    // Per zone: mean mask alpha and mean |dRGB| over the same interior
+    // sample points, masked build vs step-2 build (?softmasks=0).
+    const rows = [];
+    for (const z of info.zones) {
+      if (z.samples.length < 12) continue;
+      const meanA = z.samples.reduce((a, s) => a + s.a, 0) / z.samples.length;
+      const dM = zoneDrgb(masked.filled, masked.bare, z.samples, info.rect);
+      const dU = zoneDrgb(unmasked.filled, unmasked.bare, z.samples, info.rect);
+      rows.push({ zone: z.zone, n: z.samples.length, meanA, dMasked: dM, dUnmasked: dU });
+      console.log(`INFO  softmask-zone  ${z.zone} n=${z.samples.length} meanAlpha=${meanA.toFixed(2)} dRGB masked=${dM.toFixed(2)} unmasked=${dU.toFixed(2)}`);
+    }
+    softMask.zones = rows.map((r) => ({ ...r, meanA: +r.meanA.toFixed(3), dMasked: +r.dMasked.toFixed(2), dUnmasked: +r.dUnmasked.toFixed(2) }));
+    results.softMask = softMask;
+
+    // hair-drop: the most hair-suppressed zone that carried pigment
+    // unmasked must lose most of it under the mask.
+    const occluded = rows.filter((r) => r.dUnmasked >= 4).sort((a, b) => a.meanA - b.meanA)[0];
+    // skin-keep: the least-suppressed pigmented zone keeps its pigment.
+    const skin = rows.filter((r) => r.dUnmasked >= 4).sort((a, b) => b.meanA - a.meanA)[0];
+    if (!occluded || !skin) {
+      record("hair-drop", false, "no pigmented zones to compare (unmasked dRGB < 4 everywhere)");
+    } else {
+      record("hair-drop", occluded.dMasked <= 0.6 * occluded.dUnmasked,
+        `${occluded.zone}: |dRGB| ${occluded.dMasked.toFixed(2)} vs unmasked ${occluded.dUnmasked.toFixed(2)} at meanAlpha ${occluded.meanA.toFixed(2)} (gate <= 60%)`);
+      record("skin-keep", skin.dMasked >= 4 && skin.dMasked >= 0.6 * skin.dUnmasked,
+        `${skin.zone}: |dRGB| ${skin.dMasked.toFixed(2)} vs unmasked ${skin.dUnmasked.toFixed(2)} at meanAlpha ${skin.meanA.toFixed(2)} (gate >= 4 and >= 60%)`);
+    }
+  }
+}
 
 // Gates (only meaningful on the blend-mode build; before runs just record).
 if (GATE) {
@@ -260,6 +451,13 @@ const side = spawnSync("ffmpeg", ["-y",
   "-i", join(OUT, "bare.png"), "-i", join(OUT, "blush.png"), "-i", join(OUT, "contour.png"),
   "-filter_complex", "[0][1][2]hstack=inputs=3", join(OUT, "side-by-side.png")], { encoding: "utf8" });
 if (side.status !== 0) console.log("WARN  side-by-side failed: " + (side.stderr || "").slice(-200));
+// Step-3 A/B side: masked | unmasked on the tan face.
+if (existsSync(join(OUT, "all-tan-unmasked.png"))) {
+  const side3 = spawnSync("ffmpeg", ["-y",
+    "-i", join(OUT, "bare-tan.png"), "-i", join(OUT, "all-tan-masked.png"), "-i", join(OUT, "all-tan-unmasked.png"),
+    "-filter_complex", "[0][1][2]hstack=inputs=3", join(OUT, "side-by-side-softmask.png")], { encoding: "utf8" });
+  if (side3.status !== 0) console.log("WARN  softmask side-by-side failed: " + (side3.stderr || "").slice(-200));
+}
 
 writeFileSync(join(OUT, "results.json"), JSON.stringify(results, null, 2));
 await browser.close();
