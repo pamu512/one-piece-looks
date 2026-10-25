@@ -84,6 +84,14 @@ else
   fail=1
 fi
 
+echo "--- demos/probe-expression-gate.mjs"
+if GATE=1 node demos/probe-expression-gate.mjs; then
+  echo "--- demos/probe-expression-gate.mjs OK"
+else
+  echo "--- demos/probe-expression-gate.mjs FAILED"
+  fail=1
+fi
+
 if [ "$fail" = "1" ]; then
   echo "pixel-gates: FAIL"
   exit 1

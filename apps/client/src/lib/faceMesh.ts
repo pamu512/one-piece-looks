@@ -23,7 +23,9 @@
  * Contract (face.ts FaceLandmarks): lip/lipInner/eyeL/eyeR/browL/browR are
  * frame-fraction polygons; lipMeanL/A/B are the mean CIE Lab of the flesh
  * inside the lip ring minus the mouth hole. Irises (468-477) exist in this
- * model but we do not need them; we slice to the first 478 without blendshapes.
+ * model but we do not need them. Blendshapes ARE on (IMAGE mode, one shot
+ * per capture): the coach expression gate reads jawOpen / mouthSmile off
+ * the same detection - see coach/expressionGate.ts.
  */
 
 /** Shared 4:5 frame dimensions (keep in sync with face.ts NORMAL_W/H). */
@@ -59,6 +61,7 @@ type VisionModule = typeof import("@mediapipe/tasks-vision");
 // Coach cascade (face-shape classification for shape-aware contour).
 import { measureFace } from "./coach/measure.ts";
 import { classifyFace } from "./coach/faceShape.ts";
+import { blendScoresFromCategories, type BlendScores } from "./coach/expressionGate.ts";
 
 /**
  * The raw 478 landmark fractions of the LAST successful mesh detection
@@ -70,6 +73,19 @@ let lastRawPoints: ReadonlyArray<{ x: number; y: number }> | null = null;
 /** Raw mesh points from the last detectFaceWithMesh success, if any. */
 export function lastMeshPoints(): ReadonlyArray<{ x: number; y: number }> | null {
   return lastRawPoints;
+}
+
+/**
+ * Blendshape gate scores (jawOpen, mouthSmile) of the LAST successful mesh
+ * detection, or null when that detection carried no blendshape output.
+ * Same lifetime as lastMeshPoints; the coach expression gate fails open
+ * (closed-mouth default) when this is null.
+ */
+let lastBlendScores: BlendScores | null = null;
+
+/** Blendshape scores from the last detectFaceWithMesh success, if any. */
+export function lastBlendshapes(): BlendScores | null {
+  return lastBlendScores;
 }
 
 let visionPromise: Promise<VisionModule | null> | null = null;
@@ -118,7 +134,11 @@ export function loadFaceLandmarker(): Promise<FaceLandmarker | null> {
             baseOptions: { modelAssetBuffer: new Uint8Array(buf) },
             runningMode: "IMAGE",
             numFaces: 1,
-            outputFaceBlendshapes: false,
+            // One IMAGE-mode shot per capture: the scores cost nothing on
+            // this path and the coach expression gate fades mouth pigment
+            // on open-mouth / big-smile photos (coach/expressionGate.ts).
+            // The VIDEO-mode landmarker in liveContour keeps them off.
+            outputFaceBlendshapes: true,
             outputFacialTransformationMatrixes: false,
           });
         } finally {
@@ -346,9 +366,13 @@ export async function detectFaceWithMesh(canvas: HTMLCanvasElement): Promise<imp
     if (!ctx) return null;
     const result = landmarker.detect(canvas);
     const face = result.faceLandmarks?.[0];
-    if (!face || face.length < 468) return null;
+    if (!face || face.length < 468) {
+      lastBlendScores = null;
+      return null;
+    }
     const pts: MeshPoint[] = face.map((p) => ({ x: p.x, y: p.y, z: p.z ?? 0 }));
     lastRawPoints = face.map((p) => ({ x: p.x, y: p.y }));
+    lastBlendScores = blendScoresFromCategories(result.faceBlendshapes?.[0]?.categories ?? null);
 
     // The 20-point ring connects sparse landmarks with straight chords; on a
     // curved lip that cuts the flesh at the cupid's bow and corners (measured:
@@ -411,6 +435,7 @@ export async function detectFaceWithMesh(canvas: HTMLCanvasElement): Promise<imp
       ...(faceShape ? { faceShape } : {}),
     };
   } catch {
+    lastBlendScores = null;
     return null;
   }
 }

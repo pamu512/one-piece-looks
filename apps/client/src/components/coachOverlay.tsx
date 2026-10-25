@@ -7,7 +7,9 @@
  * available they are additionally clipped by a soft mask
  * (lib/coach/softMask.ts) so pigment follows skin and stops at hair and
  * background - the mask carries the feather then, so the softness is not
- * doubled. Guide strokes
+ * doubled. On an open mouth or a wide smile the pigment's opacity is
+ * faded by the expression gate (lib/coach/expressionGate.ts) - opacity
+ * only, geometry never moves. Guide strokes
  * are a second pass with no blend and no blur, so the annotation stays a
  * crisp vector. Paired zone stems (cheek_apple) resolve to the _L/_R
  * polygons.
@@ -17,9 +19,12 @@ import { useEffect, useMemo, useState } from "react";
 import { buildContourMap, type ZoneOrRibbon, type Pt } from "../lib/coach/zones.ts";
 import { pointsAttr, zoneLayers } from "../lib/coach/fill.ts";
 import { normalizeFace } from "../lib/coach/measure.ts";
-import { lastMeshPoints } from "../lib/faceMesh.ts";
+import { lastBlendshapes, lastMeshPoints } from "../lib/faceMesh.ts";
 import { parseFacePhoto } from "../lib/faceParse.ts";
 import { buildMaskKit, gateForZone, zoneMaskDataUrl, type MaskKit } from "../lib/coach/softMask.ts";
+import {
+  expressionGateDisabled, expressionGain, expressionSignals, lipOpenness,
+} from "../lib/coach/expressionGate.ts";
 import type { CoachStep } from "../lib/coach/plan.ts";
 
 const VB_W = 1000;
@@ -63,6 +68,26 @@ export function CoachOverlay({ photo, steps, activeStep }: Props) {
     () => (map ? zoneLayers(shown, shapes, map.norm.iod, VB_W, activeStep === null) : { pigments: [], guides: [] }),
     [map, shown, shapes, activeStep],
   );
+
+  // Expression gates (phase 2 step 4): fade mouth-adjacent pigment on an
+  // open mouth or a wide smile. Signals come from the same mesh detection
+  // that drew the map: lip-part geometry from the raw points, jawOpen /
+  // mouthSmile from the blendshapes of that detection. Absent signals
+  // (no blendshapes, missing landmark) keep gain 1 - the closed-mouth
+  // default. ?exprgate=0 renders ungated for the probe A/B.
+  const blends = lastBlendshapes();
+  const gains = useMemo(() => {
+    if (expressionGateDisabled()) return null;
+    const signals = expressionSignals({
+      lipOpenness: lipOpenness(raw),
+      jawOpen: blends?.jawOpen ?? null,
+      mouthSmile: blends?.mouthSmile ?? null,
+    });
+    return {
+      signals,
+      byZone: new Map(pigments.map((p) => [p.zoneId, expressionGain(p.zoneId, signals)])),
+    };
+  }, [pigments, raw, blends]);
 
   // Soft masks (phase 2 step 3): one bisenet parse per photo, async.
   // Until it lands - or forever, if the model or runtime is unavailable -
@@ -125,7 +150,10 @@ export function CoachOverlay({ photo, steps, activeStep }: Props) {
 
   return (
     <svg viewBox={`0 0 ${VB_W} ${VB_H}`} className="coach-overlay" role="img"
-      aria-label="Face map showing where each step applies">
+      aria-label="Face map showing where each step applies"
+      data-expr={gains
+        ? `lip:${gains.signals.lipOpenness?.toFixed(3) ?? "-"},jaw:${gains.signals.jawOpen?.toFixed(3) ?? "-"},smile:${gains.signals.mouthSmile?.toFixed(3) ?? "-"}`
+        : "off"}>
       <image href={photo} x={0} y={0} width={VB_W} height={VB_H} preserveAspectRatio="xMidYMid slice" />
       <defs>
         {masks?.map((m) => m && (
@@ -139,9 +167,11 @@ export function CoachOverlay({ photo, steps, activeStep }: Props) {
         const points = pointsFor(p.zoneId);
         if (!points) return null;
         const m = masks?.[i];
+        const gain = gains?.byZone.get(p.zoneId) ?? 1;
         return (
           <polygon key={`${p.zoneId}:${i}`} className="zone-pigment" data-zone={p.zoneId} data-blend={p.blend}
-            points={points} fill={p.fill} fillOpacity={p.opacity}
+            data-gain={gain.toFixed(3)}
+            points={points} fill={p.fill} fillOpacity={p.opacity * gain}
             mask={m ? `url(#${m.id})` : undefined}
             // The mask carries the feather when present; blur it too and the
             // sigma would apply twice.
