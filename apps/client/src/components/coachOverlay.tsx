@@ -7,23 +7,24 @@
  * photo we invert: multiply by IOD, rotate by +roll. Step colors come from
  * the plan's shadeHex (server-parity formulas), so what the user sees is
  * what the looks paint.
+ *
+ * Rendering: each shape paints twice. The pigment polygon carries the
+ * shade through a blend mode (multiply for shade depth, soft-light for
+ * blush/highlight pigment) and a gaussian feather, so skin texture and
+ * luminance read through the color instead of a flat alpha sticker. The
+ * guide polygon above it stays a crisp vector outline - the "where" stays
+ * legible on top of the soft fill (see lib/coach/fill.ts).
  */
 
 import { useMemo } from "react";
 import { buildContourMap, type ZoneOrRibbon, type Pt } from "../lib/coach/zones.ts";
+import { VERB_FILL, blendForVerb, charRadiusIod, featherSigmaVb, type FillBlend } from "../lib/coach/fill.ts";
 import { normalizeFace } from "../lib/coach/measure.ts";
 import { lastMeshPoints } from "../lib/faceMesh.ts";
 import type { CoachStep } from "../lib/coach/plan.ts";
 
 const VB_W = 1000;
 const VB_H = 1250;
-
-const VERB_FILL: Record<string, number> = {
-  contour: 0.55,
-  warm: 0.5,
-  define: 0.5,
-  brighten: 0.45,
-};
 
 interface Props {
   /** The bare face photo (data URL), same source as the capture. */
@@ -70,11 +71,11 @@ export function CoachOverlay({ photo, steps, activeStep }: Props) {
     }).join(" ");
 
   const shown = activeStep === null ? steps : [steps[activeStep]!].filter(Boolean);
-  const byId = new Map<string, { fill: string; op: number }>();
+  const byId = new Map<string, { fill: string; op: number; blend: FillBlend }>();
   for (const [si, s] of shown.entries()) {
     const op = VERB_FILL[s.verb] ?? 0.45;
     for (const id of s.zoneIds) {
-      if (!byId.has(id)) byId.set(id, { fill: s.shadeHex, op: op * (activeStep === null ? 0.7 : 1) });
+      if (!byId.has(id)) byId.set(id, { fill: s.shadeHex, op: op * (activeStep === null ? 0.7 : 1), blend: blendForVerb(s.verb) });
     }
     void si;
   }
@@ -88,9 +89,17 @@ export function CoachOverlay({ photo, steps, activeStep }: Props) {
         .filter((z) => byId.has(z.id))
         .map((z) => {
           const style = byId.get(z.id)!;
+          // Gaussian feather from the shape's own size: the soft edge a
+          // brush leaves, scaled with the zone (never a hard die-cut).
+          const sigma = featherSigmaVb(charRadiusIod(z), norm.iod, VB_W);
           return (
-            <polygon key={z.id} points={poly(z.poly)} fill={style.fill} fillOpacity={style.op}
-              stroke={style.fill} strokeWidth={2.5} strokeOpacity={0.85} />
+            <g key={z.id}>
+              <polygon className="zone-pigment" data-zone={z.id} data-blend={style.blend}
+                points={poly(z.poly)} fill={style.fill} fillOpacity={style.op}
+                style={{ mixBlendMode: style.blend, filter: `blur(${sigma.toFixed(1)}px)` }} />
+              <polygon className="zone-guide" data-zone={z.id} points={poly(z.poly)}
+                fill="none" stroke={style.fill} strokeWidth={2.5} strokeOpacity={0.85} />
+            </g>
           );
         })}
     </svg>

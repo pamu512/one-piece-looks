@@ -806,10 +806,14 @@ export function startLiveContour(
       }
       const W = canvas.width, H = canvas.height;
       // Airbrush only (2026-10-11: no SAW face). No polygons, no outlines,
-      // no markers: soft radial product whose motion IS the instruction.
-      // All painting happens on one offscreen color layer, composited once
-      // per frame with globalCompositeOperation so shade multiplies and
-      // light screens - like real product on skin.
+      // no markers: soft radial guides whose motion IS the instruction.
+      // The teaching layer stays one neutral grey, drawn straight on this
+      // transparent overlay canvas - the client does not simulate product
+      // color on the live feed (her own makeup is the only color on
+      // screen, and the grader samples the raw video frame). Pigment
+      // compositing - soft-light blush, multiply shade, feathered edges -
+      // lives on the photo face map (coachOverlay + coach/fill.ts); soft
+      // segmentation masks on video are the next step (zll-bisenet).
       // Guided mode: slow, single-step, with a hold at the end of each
       // sweep so she can follow with her own brush.
       const cycle = guide ? 3200 : 1800;

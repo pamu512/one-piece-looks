@@ -72,6 +72,18 @@ run() {
 run demos/probe-lip-align.mjs
 run demos/probe-look-distinct.mjs
 
+# Soft-fill gates (plan phase 2 step 2): the coach face-map fills must
+# composite (soft-light pigment / multiply depth) with feathered edges -
+# texture through pigment, no flat-alpha stickers. Default mask-qa face;
+# see the probe header for the before/after numbers this locked in.
+echo "--- demos/probe-soft-fills.mjs"
+if GATE=1 node demos/probe-soft-fills.mjs; then
+  echo "--- demos/probe-soft-fills.mjs OK"
+else
+  echo "--- demos/probe-soft-fills.mjs FAILED"
+  fail=1
+fi
+
 if [ "$fail" = "1" ]; then
   echo "pixel-gates: FAIL"
   exit 1
