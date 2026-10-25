@@ -22,19 +22,29 @@
  * polygon with a bisenet soft mask (skin probability x hair/bg
  * occlusion); ?softmasks=0 on the same build reproduces the step-2
  * geometry-only fill, so the A/B isolates the mask itself. Runs on the
- * tan diamond face, whose temple contour ribbons sit under real hair:
+ * tan diamond face, whose contour ribbons sit under real hair:
  *
  *   masks-present  pigment polygons carry SVG masks whose images decode
  *                  with real alpha (ORT runtime + model + parse all ran
  *                  in this browser). Gate.
- *   hair-drop      on the most hair-suppressed zone (lowest mean mask
- *                  alpha among zones that carried pigment unmasked),
- *                  mean |dRGB| over the zone interior drops to <= 60%
- *                  of the unmasked build's value - no hair glow-through.
- *                  Gate.
- *   skin-keep      the least-suppressed pigmented zone keeps its pigment
- *                  (|dRGB| >= 4 and >= 60% of unmasked): the mask
- *                  suppressed hair, not the step-2 look. Gate.
+ *   hair-drop      at interior points where the mask is CLOSED (alpha
+ *                  < 0.15; with the pigment floor below, that is gate
+ *                  closure - occ/skin removed >= 85% - not the polygon's
+ *                  own feather falloff) and the step-2 build carried
+ *                  pigment (|dRGB| >= 4), the masked build must drop
+ *                  the summed pigment to <= 60%. Per point, not per
+ *                  zone: a zone-mean ratio is diluted by its clear-skin
+ *                  majority (seen: jaw zone-mean 82% while its closed
+ *                  points read 49%). Gate.
+ *   skin-keep      at interior points where the mask is OPEN (alpha
+ *                  >= 0.9) and step-2 carried pigment, the masked build
+ *                  keeps >= 60% of it and >= 4 |dRGB|: the mask
+ *                  suppressed occlusion, not the step-2 look. Gate.
+ *   mask-orders    the closed points' retained fraction must sit at
+ *                  least 15 points below the open points': the mask
+ *                  discriminates occlusion from skin (measured curve,
+ *                  2026-10-25: 0.49 / 0.65 / 0.78 / 0.84 / 0.93 / 0.95
+ *                  by alpha sixth), not a global pigment fade. Gate.
  *
  * Writes OUT/{bare,warm,define}.png, OUT/side-by-side.png (bare | after),
  * OUT/{all-tan-masked,all-tan-unmasked,bare-tan}.png, and OUT/results.json.
@@ -291,11 +301,11 @@ record("masks-present", maskedPolys > 0,
 
 /**
  * Interior samples for every pigment zone on the All view: a grid of
- * points inside the polygon (point-in-poly only - ribbons are ~6 px wide
- * on the 512 mask grid, too thin for clearance discs), with the mask
- * alpha at each sampled point when the zone carries a mask. Returns
- * samples in frame fractions plus the svg rect for screenshot-px
- * conversion.
+ * points inside EXACTLY ONE pigment polygon (overlap-free attribution -
+ * zones stack at the cheek/jaw edges, and a pixel two zones paint cannot
+ * measure either zone's mask), with the mask alpha at each point from
+ * that zone's mask. Returns samples in frame fractions plus the svg rect
+ * for screenshot-px conversion.
  */
 async function zoneSamples(p) {
   return p.evaluate(async () => {
@@ -337,35 +347,52 @@ async function zoneSamples(p) {
       } catch {
         continue; // undecodable mask: zone drops out of the A/B
       }
-      const S = 512;
-      const samples = [];
-      for (let gy = 6; gy < S - 6; gy += 6) {
-        for (let gx = 6; gx < S - 6; gx += 6) {
-          const u = gx / S, v = gy / S;
-          if (!inside(u * 1000, v * 1250)) continue;
-          samples.push({ u, v, a: alphaAt(u, v) });
-        }
-      }
-      zones.push({ zone, samples });
+      zones.push({ zone, inside, alphaAt });
     }
-    return { rect: { w: rect.width, h: rect.height }, zones };
+    const S = 512;
+    const byZone = new Map();
+    for (let gy = 6; gy < S - 6; gy += 4) {
+      for (let gx = 6; gx < S - 6; gx += 4) {
+        const u = gx / S, v = gy / S;
+        let hit = null, hits = 0;
+        for (const z of zones) {
+          if (!z.inside(u * 1000, v * 1250)) continue;
+          hit = z; hits++;
+          if (hits > 1) break; // shared pixel: not attributable
+        }
+        if (hits !== 1) continue;
+        if (!byZone.has(hit.zone)) byZone.set(hit.zone, []);
+        byZone.get(hit.zone).push({ u, v, a: hit.alphaAt(u, v) });
+      }
+    }
+    return {
+      rect: { w: rect.width, h: rect.height },
+      zones: [...byZone].map(([zone, samples]) => ({ zone, samples })),
+    };
   });
+}
+
+/** |dRGB| (filled vs bare) at one sample point, screenshot px. */
+function drgbAt(filled, bare, s, rect) {
+  const x = Math.round(s.u * rect.w * 2);
+  const y = Math.round(s.v * rect.h * 2);
+  if (x < 0 || y < 0 || x >= filled.w || y >= filled.h) return null;
+  const i = (y * filled.w + x) * 3;
+  return (Math.abs(filled.rgb[i] - bare.rgb[i])
+    + Math.abs(filled.rgb[i + 1] - bare.rgb[i + 1])
+    + Math.abs(filled.rgb[i + 2] - bare.rgb[i + 2])) / 3;
 }
 
 /** Mean |dRGB| (filled vs bare) over a zone's sample points, screenshot px. */
 function zoneDrgb(filled, bare, samples, rect) {
-  let dr = 0, dg = 0, db = 0, n = 0;
+  let sum = 0, n = 0;
   for (const s of samples) {
-    const x = Math.round(s.u * rect.w * 2);
-    const y = Math.round(s.v * rect.h * 2);
-    if (x < 0 || y < 0 || x >= filled.w || y >= filled.h) continue;
-    const i = (y * filled.w + x) * 3;
-    dr += Math.abs(filled.rgb[i] - bare.rgb[i]);
-    dg += Math.abs(filled.rgb[i + 1] - bare.rgb[i + 1]);
-    db += Math.abs(filled.rgb[i + 2] - bare.rgb[i + 2]);
+    const d = drgbAt(filled, bare, s, rect);
+    if (d == null) continue;
+    sum += d;
     n++;
   }
-  return n ? (dr + dg + db) / (3 * n) : 0;
+  return n ? sum / n : 0;
 }
 
 // A/B on the tan face: masked build vs ?softmasks=0 (step-2 fills).
@@ -405,8 +432,11 @@ if (maskedPolys > 0) {
     record("hair-drop", false, "no decodable soft masks on the All view");
   } else {
     // Per zone: mean mask alpha and mean |dRGB| over the same interior
-    // sample points, masked build vs step-2 build (?softmasks=0).
+    // sample points, masked build vs step-2 build (?softmasks=0) - the
+    // INFO rows. The gates below judge per POINT, where the mask actually
+    // closed or opened.
     const rows = [];
+    const perPoint = [];
     for (const z of info.zones) {
       if (z.samples.length < 12) continue;
       const meanA = z.samples.reduce((a, s) => a + s.a, 0) / z.samples.length;
@@ -414,22 +444,59 @@ if (maskedPolys > 0) {
       const dU = zoneDrgb(unmasked.filled, unmasked.bare, z.samples, info.rect);
       rows.push({ zone: z.zone, n: z.samples.length, meanA, dMasked: dM, dUnmasked: dU });
       console.log(`INFO  softmask-zone  ${z.zone} n=${z.samples.length} meanAlpha=${meanA.toFixed(2)} dRGB masked=${dM.toFixed(2)} unmasked=${dU.toFixed(2)}`);
+      for (const s of z.samples) {
+        const m = drgbAt(masked.filled, masked.bare, s, info.rect);
+        const u = drgbAt(unmasked.filled, unmasked.bare, s, info.rect);
+        if (m == null || u == null) continue;
+        perPoint.push({ a: s.a, m, u });
+      }
     }
     softMask.zones = rows.map((r) => ({ ...r, meanA: +r.meanA.toFixed(3), dMasked: +r.dMasked.toFixed(2), dUnmasked: +r.dUnmasked.toFixed(2) }));
     results.softMask = softMask;
+    writeFileSync(join(OUT, "perpoint.json"), JSON.stringify(perPoint.map((r) => ({
+      a: +r.a.toFixed(3), m: +r.m.toFixed(2), u: +r.u.toFixed(2),
+    }))));
+    writeFileSync(join(OUT, "sampled-zones.json"), JSON.stringify(info.zones.map((z) => ({
+      zone: z.zone,
+      samples: z.samples.map((s) => ({ u: +s.u.toFixed(4), v: +s.v.toFixed(4), a: +s.a.toFixed(3) })),
+    }))));
 
-    // hair-drop: the most hair-suppressed zone that carried pigment
-    // unmasked must lose most of it under the mask.
-    const occluded = rows.filter((r) => r.dUnmasked >= 4).sort((a, b) => a.meanA - b.meanA)[0];
-    // skin-keep: the least-suppressed pigmented zone keeps its pigment.
-    const skin = rows.filter((r) => r.dUnmasked >= 4).sort((a, b) => b.meanA - a.meanA)[0];
-    if (!occluded || !skin) {
-      record("hair-drop", false, "no pigmented zones to compare (unmasked dRGB < 4 everywhere)");
+    // hair-drop: where the mask closed on pigment step-2 carried, the
+    // masked build must kill most of it. alpha < 0.15 under the u >= 4
+    // floor is gate closure, not the polygon's feather falloff (a point
+    // whose own coverage is < 0.15 cannot carry |dRGB| >= 4 through
+    // soft-light/multiply at these opacities).
+    const closed = perPoint.filter((r) => r.a < 0.15 && r.u >= 4);
+    const openKeep = perPoint.filter((r) => r.a >= 0.9 && r.u >= 4);
+    const bands = [[0, 0.15], [0.15, 0.35], [0.35, 0.55], [0.55, 0.75], [0.75, 0.9], [0.9, 1.01]]
+      .map(([lo, hi]) => {
+        const rs = perPoint.filter((r) => r.a >= lo && r.a < hi && r.u >= 4);
+        const m = rs.reduce((x, r) => x + r.m, 0);
+        const u = rs.reduce((x, r) => x + r.u, 0);
+        return { lo, hi, n: rs.length, retained: u > 0 ? +(m / u).toFixed(3) : null };
+      });
+    softMask.gates = {
+      closedPoints: closed.length,
+      openPoints: openKeep.length,
+      closedMasked: +closed.reduce((x, r) => x + r.m, 0).toFixed(1),
+      closedUnmasked: +closed.reduce((x, r) => x + r.u, 0).toFixed(1),
+      openMasked: +openKeep.reduce((x, r) => x + r.m, 0).toFixed(1),
+      openUnmasked: +openKeep.reduce((x, r) => x + r.u, 0).toFixed(1),
+      bands,
+    };
+    if (closed.length < 5 || openKeep.length === 0) {
+      record("hair-drop", false, `too few ${closed.length < 5 ? "closed" : "open"} pigmented sample points (closed=${closed.length}, open=${openKeep.length}) - the mask never closes on carried pigment`);
+      record("skin-keep", openKeep.length > 0, `open pigmented sample points: ${openKeep.length}`);
     } else {
-      record("hair-drop", occluded.dMasked <= 0.6 * occluded.dUnmasked,
-        `${occluded.zone}: |dRGB| ${occluded.dMasked.toFixed(2)} vs unmasked ${occluded.dUnmasked.toFixed(2)} at meanAlpha ${occluded.meanA.toFixed(2)} (gate <= 60%)`);
-      record("skin-keep", skin.dMasked >= 4 && skin.dMasked >= 0.6 * skin.dUnmasked,
-        `${skin.zone}: |dRGB| ${skin.dMasked.toFixed(2)} vs unmasked ${skin.dUnmasked.toFixed(2)} at meanAlpha ${skin.meanA.toFixed(2)} (gate >= 4 and >= 60%)`);
+      const cRatio = softMask.gates.closedMasked / softMask.gates.closedUnmasked;
+      record("hair-drop", cRatio <= 0.6,
+        `${closed.length} closed points: |dRGB| sum ${softMask.gates.closedMasked} vs unmasked ${softMask.gates.closedUnmasked} = ${(cRatio * 100).toFixed(0)}% (gate <= 60%)`);
+      const oMean = softMask.gates.openMasked / openKeep.length;
+      const oRatio = softMask.gates.openMasked / softMask.gates.openUnmasked;
+      record("skin-keep", oMean >= 4 && oRatio >= 0.6,
+        `${openKeep.length} open points: |dRGB| mean ${oMean.toFixed(2)}, ${(oRatio * 100).toFixed(0)}% of unmasked (gate >= 4 and >= 60%)`);
+      record("mask-orders", cRatio + 0.15 <= oRatio,
+        `closed ${cRatio.toFixed(2)} vs open ${oRatio.toFixed(2)} (gate: gap >= 0.15)`);
     }
   }
 }

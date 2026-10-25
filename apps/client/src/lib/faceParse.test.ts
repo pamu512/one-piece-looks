@@ -26,10 +26,23 @@ test("softmax picks the dominant class with the expected probability", () => {
   const planes = planesFromLogits(lg);
   assert.ok(planes);
   const denom = Math.exp(2) + Math.exp(1) + Math.exp(0.5) + 16;
-  assert.ok(Math.abs(planes.skin[0]! - Math.exp(2) / denom) < 1e-6);
+  // the skin plane unions skin and nose (class 10 sits at logit 0 here)
+  assert.ok(Math.abs(planes.skin[0]! - (Math.exp(2) + 1) / denom) < 1e-6);
   // both lip classes sit at logit 0: p(lip) = 2 e^0 / denom
   assert.ok(Math.abs(planes.lip[0]! - 2 / denom) < 1e-6);
   assert.ok(Math.abs(planes.occ[0]! - Math.exp(1) / denom) < 1e-6, "occ is max(hair, bg)");
+});
+
+test("skin plane unions skin and nose: a nose-dominant pixel gates open", () => {
+  // Regression (2026-10-25): the nose bridge parses as class 10, not skin;
+  // a skin-only gate erased the nose-bridge highlight on every photo.
+  const lg = constantLogits(10, 3);
+  lg.fill(1.5, 1 * N, 2 * N);
+  const planes = planesFromLogits(lg);
+  assert.ok(planes);
+  const denom = Math.exp(3) + Math.exp(1.5) + 17;
+  assert.ok(Math.abs(planes.skin[0]! - (Math.exp(3) + Math.exp(1.5)) / denom) < 1e-6,
+    "nose probability must flow into the skin plane");
 });
 
 test("lip plane sums u_lip and l_lip", () => {
@@ -39,14 +52,14 @@ test("lip plane sums u_lip and l_lip", () => {
   assert.ok(planes);
   const denom = Math.exp(3) + Math.exp(2.5) + 17;
   assert.ok(Math.abs(planes.lip[0]! - (Math.exp(3) + Math.exp(2.5)) / denom) < 1e-6);
-  assert.ok(Math.abs(planes.skin[0]! - 1 / denom) < 1e-6);
+  assert.ok(Math.abs(planes.skin[0]! - 2 / denom) < 1e-6);
   assert.ok(Math.abs(planes.occ[0]! - 1 / denom) < 1e-6);
 });
 
 test("uniform logits give uniform 1/19 probabilities", () => {
   const planes = planesFromLogits(new Float32Array(PARSE_CLASS_COUNT * N).fill(-1.7));
   assert.ok(planes);
-  assert.ok(Math.abs(planes.skin[7]! - 1 / 19) < 1e-6);
+  assert.ok(Math.abs(planes.skin[7]! - 2 / 19) < 1e-6, "skin plane is skin + nose");
   assert.ok(Math.abs(planes.lip[7]! - 2 / 19) < 1e-6);
   assert.ok(Math.abs(planes.occ[7]! - 1 / 19) < 1e-6);
 });
@@ -65,12 +78,13 @@ test("wrong class count or non-finite rows resolve safely", () => {
   assert.equal(planesFromLogits(new Float32Array(18 * N)), null, "18-class graph rejected");
   assert.equal(planesFromLogits(new Float32Array(20 * N)), null, "20-class graph rejected");
   // NaN in exactly one pixel's skin logit (plane 1 starts at N): that
-  // pixel reads zero probability, its neighbors are unaffected
+  // pixel reads zero from class 1 - only the nose class's e^0 remains in
+  // the skin union - and its neighbors are unaffected
   const mixed = constantLogits(1, 3);
   mixed[N] = Number.NaN;
   const planes = planesFromLogits(mixed)!;
   const denom = Math.exp(3) + 18;
-  assert.equal(planes.skin[0]!, 0, "NaN logit reads as zero probability");
-  assert.ok(Math.abs(planes.skin[1]! - Math.exp(3) / denom) < 1e-6, "other pixels unaffected");
+  assert.ok(Math.abs(planes.skin[0]! - 1 / 18) < 1e-6, "NaN skin logit contributes nothing; its pixel's own sum is the 18 clean classes");
+  assert.ok(Math.abs(planes.skin[1]! - (Math.exp(3) + 1) / denom) < 1e-6, "other pixels unaffected");
   assert.ok(Number.isFinite(planes.occ[0]!));
 });

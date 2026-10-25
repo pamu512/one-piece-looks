@@ -16,9 +16,15 @@
  * exported graph: input `input` [1,3,512,512], output `logits`
  * [1,19,512,512], then per-pixel softmax here.
  *
- * Class indices (CelebAMask-HQ 19): 0 background, 1 skin, 12 u_lip,
- * 13 l_lip, 17 hair. The planes the mask math needs:
- *   skin p[1]   lip p[12] + p[13]   occ max(p[0] hair-adjacent, p[17])
+ * Class indices (verified against this export with the exported graph on
+ * the QA faces, 2026-10-25; demos/face-parsing/demo.py agrees - it reads
+ * the nose centroid off class 10): 0 background, 1 skin, 10 nose,
+ * 12 u_lip, 13 l_lip, 17 hair. The planes the mask math needs:
+ *   skin p[1] + p[10]  (skin and nose are both pigment-bearing skin
+ *                       surfaces; the nose bridge highlight dies without
+ *                       the union)
+ *   lip  p[12] + p[13]
+ *   occ  max(p[0], p[17])  - background and hair never glow
  */
 
 import { loadOrtRuntime, releaseOrt, withOrtLock } from "./faceModel.ts";
@@ -32,6 +38,7 @@ export const PARSE_SIZE = 512;
 export const PARSE_CLASSES = {
   bg: 0,
   skin: 1,
+  nose: 10,
   uLip: 12,
   lLip: 13,
   hair: 17,
@@ -117,7 +124,9 @@ function preprocess(img: HTMLImageElement): Float32Array | null {
 
 /**
  * Per-pixel softmax over the 19 classes, reduced to the three planes the
- * mask math needs. Layout CHW: logits[c * n + y * size + x]. Returns null
+ * mask math needs: skin = p(skin) + p(nose) - the model splits
+ * pigment-bearing skin into two classes and the nose bridge highlight
+ * needs both. Layout CHW: logits[c * n + y * size + x]. Returns null
  * for a plane-sized mismatch (not this graph); non-finite rows resolve to
  * all-zero planes at that pixel, the safe (paint-nothing) direction.
  */
@@ -144,7 +153,7 @@ export function planesFromLogits(logits: Float32Array): ParsePlanes | null {
     }
     if (!(sum > 0)) continue;
     const p = (c: number): number => (exps[c] ?? 0) / sum;
-    skin[i] = p(PARSE_CLASSES.skin);
+    skin[i] = p(PARSE_CLASSES.skin) + p(PARSE_CLASSES.nose);
     lip[i] = p(PARSE_CLASSES.uLip) + p(PARSE_CLASSES.lLip);
     occ[i] = Math.max(p(PARSE_CLASSES.bg), p(PARSE_CLASSES.hair));
   }
