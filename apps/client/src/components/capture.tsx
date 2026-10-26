@@ -6,29 +6,46 @@ import { hexToRgb, sampleDisk, type Category } from "../lib/types";
 export function useCamera() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const startGen = useRef(0);
   const [state, setState] = useState<"idle" | "starting" | "live" | "denied">("idle");
 
   const stop = useCallback(() => {
+    startGen.current += 1;
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setState("idle");
   }, []);
 
   const start = useCallback(async () => {
+    const gen = ++startGen.current;
     setState("starting");
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      if (gen === startGen.current) setState("denied");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 1706 } },
         audio: false,
       });
+      if (gen !== startGen.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       streamRef.current = stream;
       const v = videoRef.current;
       if (v) {
         v.srcObject = stream;
         await v.play().catch(() => undefined);
       }
+      if (gen !== startGen.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        if (streamRef.current === stream) streamRef.current = null;
+        return;
+      }
       setState("live");
     } catch {
+      if (gen !== startGen.current) return;
       setState("denied");
     }
   }, []);

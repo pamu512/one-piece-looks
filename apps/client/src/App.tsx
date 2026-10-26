@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import {
   ApiError, EVENTS, MOODS, api, hexToRgb, newIdemKey, setLockAccent,
   type Category, type Event, type FaceLandmarksPayload, type FaceResult, type Look, type LooksResult,
@@ -26,7 +26,8 @@ import {
 /* =================================================================
  * Sculpt. Three beats, one persistent face photo.
  *
- * Beat 1  camera: full-bleed mirror, glowing oval guide, one shutter.
+ * Beat 1  camera: chooser first (camera, photo, or sample). The mirror
+ *         and shutter open only after Use camera.
  *         A brief scan auto-suggests the lock (zero taps); tap adjusts.
  * Beat 2  lock confirm: ring stamped on the color, pan-shift footnote,
  *         one Build button. Everything else is out of the way.
@@ -93,8 +94,13 @@ function panShiftSentence(onFace: string, pan: string | null): string {
 }
 
 export default function App() {
-  const [stage, setStage] = useState<Stage>("coach");
+  // Beat 1 is the camera chooser, not the live coach: the coach mirror
+  // auto-starts getUserMedia, and a permission dialog must never be the
+  // first beat (V1 review, 2026-10-24). The coach stays one hop in.
+  const [stage, setStage] = useState<Stage>("camera");
   const [photo, setPhoto] = useState<string | null>(null);
+  // True only for the attributed demo fixture. Later beats must not call it her photo.
+  const [demoSample, setDemoSample] = useState(false);
 
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [face, setFace] = useState<FaceResult | null>(null);
@@ -166,7 +172,7 @@ export default function App() {
   }, [lock, session, face, photo, faceAttempt, landmarks]);
 
   const restart = () => {
-    setStage("camera"); setPhoto(null); setFace(null); setTone(null); setLock(null);
+    setStage("camera"); setPhoto(null); setDemoSample(false); setFace(null); setTone(null); setLock(null);
     setLandmarks(null);
     setMood("Soft"); setEvent("Casual"); setLooks(null); setBuiltPair(null);
     setError(null); setPhase(null); setBusy(false);
@@ -231,7 +237,8 @@ export default function App() {
 
       {stage === "camera" && (
         <CameraStage
-          onPhoto={(p, lm) => {
+          onPhoto={(p, lm, kind) => {
+            setDemoSample(kind === "sample");
             setPhoto(p); setLandmarks(lm ?? null); setStage("photo");
           }}
         />
@@ -247,8 +254,9 @@ export default function App() {
             setLock({ category, onFaceHex: hex, productHex: null, unverified, point })}
           onUpdateProduct={(hex) =>
             setLock((l) => (l ? { ...l, productHex: hex } : l))}
+          demoSample={demoSample}
           onRetake={() => {
-            setPhoto(null); setLock(null); setFace(null); setTone(null); setLandmarks(null);
+            setPhoto(null); setDemoSample(false); setLock(null); setFace(null); setTone(null); setLandmarks(null);
             setStage("camera");
           }}
           onBuild={(toneChoice) => void buildLooks(mood, event, toneChoice)}
@@ -272,6 +280,7 @@ export default function App() {
             skinHex={face?.tone.source === "api" ? face.tone.skinColor : (face?.toneHex ?? "#c28e6b")}
             lockHex={lock.onFaceHex}
             shown={stage === "looks"}
+            demoSample={demoSample}
             onOpenCoach={() => { setCoachFocus(null); setStage(stageAfterTeach()); }}
             onTeachRole={(role) => { setCoachFocus(role); setStage(stageAfterTeach()); }}
             onRebuild={() => void buildLooks(mood, event)}
@@ -287,86 +296,226 @@ export default function App() {
 
 /* ================= beat 1: full-bleed camera ================= */
 
-function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks | null) => void }) {
-  const cam = useCamera();
+const PHOTO_LOAD_ERROR = "That photo didn't load. Pick another, or use the camera.";
+const NO_FRAME_ERROR = "No frame yet. Hold still and tap the shutter again.";
 
+type CaptureKind = "camera" | "file" | "sample";
+
+function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks | null, kind: CaptureKind) => void }) {
+  const cam = useCamera();
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [reading, setReading] = useState<null | "sample" | "photo">(null);
+  const job = useRef(0);
+  const deniedPhotoRef = useRef<HTMLLabelElement>(null);
+
+  // Warm the detector only. The camera is offered, never assumed: the
+  // first beat shows camera / photo / sample with no permission dialog,
+  // and start() runs only when she taps Use camera.
   useEffect(() => {
     void loadFaceFrameSession();
-    void cam.start();
-    return () => cam.stop();
+    return () => {
+      job.current += 1;
+      cam.stop();
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const process = useCallback((src: string) => {
+  // After a deny, land on the photo control. The button that asked for
+  // the camera has unmounted, and a file label is not in the tab order
+  // until something focuses it.
+  useEffect(() => {
+    if (cam.state === "denied") deniedPhotoRef.current?.focus();
+  }, [cam.state]);
+
+  const process = useCallback((src: string, kind: CaptureKind) => {
+    const id = ++job.current;
+    setPhotoError(null);
+    setReading(kind === "sample" ? "sample" : "photo");
+    if (!src) {
+      setReading(null);
+      setPhotoError(PHOTO_LOAD_ERROR);
+      return;
+    }
     // Normalize to the shared 4:5 frame, detect once (model when its runtime
     // is available, heuristic otherwise), then hand over.
     const img = new Image();
-    img.onload = () => {
-      const c = normalizeTo45(img);
-      const dataUrl = c.toDataURL("image/jpeg", 0.92);
-      void detectFaceOnEncodedPhoto(dataUrl, c).then((lm) => onPhoto(dataUrl, lm));
+    const fail = () => {
+      if (id !== job.current) return;
+      setReading(null);
+      setPhotoError(PHOTO_LOAD_ERROR);
     };
-    img.onerror = () => onPhoto(src, null);
+    img.onload = () => {
+      if (id !== job.current) return;
+      if (!img.naturalWidth || !img.naturalHeight) {
+        fail();
+        return;
+      }
+      let dataUrl: string;
+      let frame: HTMLCanvasElement;
+      try {
+        frame = normalizeTo45(img);
+        dataUrl = frame.toDataURL("image/jpeg", 0.92);
+      } catch {
+        fail();
+        return;
+      }
+      if (!dataUrl.startsWith("data:image/")) {
+        fail();
+        return;
+      }
+      void detectFaceOnEncodedPhoto(dataUrl, frame).then(
+        (lm) => {
+          if (id !== job.current) return;
+          onPhoto(dataUrl, lm, kind);
+        },
+        () => {
+          if (id !== job.current) return;
+          onPhoto(dataUrl, null, kind);
+        },
+      );
+    };
+    img.onerror = fail;
     img.src = src;
   }, [onPhoto]);
 
   const onFile = (f: File | undefined) => {
     if (!f) return;
+    const id = ++job.current;
+    if (f.type && !f.type.startsWith("image/")) {
+      setReading(null);
+      setPhotoError("That file isn't a photo. Choose an image, or use the camera.");
+      return;
+    }
+    setPhotoError(null);
+    setReading("photo");
     const r = new FileReader();
-    r.onload = () => process(String(r.result));
+    r.onload = () => {
+      if (id !== job.current) return;
+      const result = r.result;
+      if (typeof result !== "string" || result.length === 0) {
+        setReading(null);
+        setPhotoError(PHOTO_LOAD_ERROR);
+        return;
+      }
+      process(result, "file");
+    };
+    r.onerror = () => {
+      if (id !== job.current) return;
+      setReading(null);
+      setPhotoError(PHOTO_LOAD_ERROR);
+    };
     r.readAsDataURL(f);
   };
 
-  const useSample = () => {
-    const src = "fixtures/face-portrait-live.jpg";
-    const img = new Image();
-    img.onload = () => {
-      const c = normalizeTo45(img);
-      const dataUrl = c.toDataURL("image/jpeg", 0.92);
-      void detectFaceOnEncodedPhoto(dataUrl, c).then((lm) => onPhoto(dataUrl, lm));
-    };
-    img.onerror = () => onPhoto(src, null);
-    img.src = src;
+  const onPick = (e: ChangeEvent<HTMLInputElement>) => {
+    onFile(e.target.files?.[0]);
+    e.target.value = "";
+  };
+
+  const startCamera = () => {
+    job.current += 1;
+    setReading(null);
+    setPhotoError(null);
+    void cam.start();
+  };
+
+  // Demo convenience: the attributed fixture runs the exact camera path
+  // (normalize + detect). Never claimed as her photo.
+  const useSample = () => process("fixtures/face-portrait-live.jpg", "sample");
+
+  const takePhoto = () => {
+    const p = cam.grab();
+    if (p) process(p, "camera");
+    else setPhotoError(NO_FRAME_ERROR);
   };
 
   return (
-    <section className="stage stage-camera fade-in" aria-label="Take your photo">
+    <section
+      className="stage stage-camera fade-in"
+      aria-label="Start your look"
+      aria-busy={reading !== null || cam.state === "starting" ? true : undefined}
+    >
       <div className="camera-media">
-        <video ref={cam.videoRef} playsInline muted aria-label="Front camera preview" />
+        <video
+          ref={cam.videoRef}
+          playsInline
+          muted
+          aria-label="Front camera preview"
+          aria-hidden={cam.state === "live" ? undefined : true}
+        />
         {cam.state === "live" && <FaceGuideOverlay />}
-        {cam.state === "starting" && <p className="cam-note">Starting the camera…</p>}
+        {cam.state === "starting" && <p className="cam-note" role="status">Starting the camera…</p>}
 
-        {cam.state === "denied" ? (
+        {cam.state === "idle" ? (
+          <div className="chooser">
+            <div className="denied-glow" aria-hidden />
+            <div className="frame-scroll">
+            <p className="denied-title display">One piece.<br />Three looks.</p>
+            <p className="chooser-sub">Wear the one shade you love. We build three looks around it.</p>
+            <div className="chooser-actions">
+              <button type="button" className="btn btn-primary btn-big" onClick={startCamera}>
+                Use camera
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={useSample}>
+                Try a sample face
+              </button>
+              <label className="btn btn-ghost file-btn">
+                Choose a photo
+                <input type="file" accept="image/*" onChange={onPick} />
+              </label>
+            </div>
+            </div>
+          </div>
+        ) : cam.state === "denied" ? (
           <div className="denied">
             <div className="denied-glow" aria-hidden />
+            <div className="frame-scroll">
             <p className="denied-title display">One piece.<br />Three looks.</p>
-            <label className="btn btn-primary btn-big">
-              Choose a photo
-              <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
-            </label>
-            <button className="sample-link" onClick={useSample}>
-              or try it with a sample face
-            </button>
+            <p className="chooser-sub" role="status">The camera didn't start. A photo still works.</p>
+            <div className="chooser-actions">
+              <label className="btn btn-primary btn-big file-btn" tabIndex={-1} ref={deniedPhotoRef}>
+                Choose a photo
+                <input type="file" accept="image/*" onChange={onPick} />
+              </label>
+              <button type="button" className="btn btn-ghost" onClick={useSample}>
+                Try a sample face
+              </button>
+              <button type="button" className="btn btn-ghost" onClick={startCamera}>
+                Use camera
+              </button>
+            </div>
+            </div>
           </div>
         ) : (
           <>
             <p className="cam-hint" aria-hidden>Wear your one piece. Center your face, then shoot.</p>
             <div className="cam-actions">
-              <label className="mini-chip">
-                <input type="file" accept="image/*" hidden onChange={(e) => onFile(e.target.files?.[0])} />
+              <label className="mini-chip file-btn">
+                <input type="file" accept="image/*" onChange={onPick} />
                 Photo
               </label>
               <button
+                type="button"
                 className="shutter"
                 disabled={cam.state !== "live"}
-                onClick={() => { const p = cam.grab(); if (p) process(p); }}
+                onClick={takePhoto}
                 aria-label="Take the photo"
               >
                 <span className="shutter-core" />
               </button>
-              <span className="mini-chip ghost" aria-hidden>Smile</span>
+              {cam.state === "starting" ? (
+                <button type="button" className="mini-chip cam-back" onClick={() => cam.stop()}>Back</button>
+              ) : (
+                <span className="mini-chip ghost" aria-hidden>Smile</span>
+              )}
             </div>
           </>
         )}
+        {reading && !photoError && (
+          <p className="cam-status" role="status">
+            {reading === "sample" ? "Opening the sample…" : "Opening that photo…"}
+          </p>
+        )}
+        {photoError && <p className="photo-error" role="alert">{photoError}</p>}
       </div>
       <p className="privacy-once">Photos go to the YouCam service for analysis. We don't keep them.</p>
     </section>
@@ -376,7 +525,7 @@ function CameraStage({ onPhoto }: { onPhoto: (dataUrl: string, lm: FaceLandmarks
 /* ================= beat 2: lock + build ================= */
 
 function PhotoStage({
-  photo, landmarks, lock, face, tone, onLock, onUpdateProduct, onRetake, onBuild, busy, phase,
+  photo, landmarks, lock, face, tone, onLock, onUpdateProduct, onRetake, onBuild, busy, phase, demoSample,
 }: {
   photo: string;
   landmarks: FaceLandmarks | null;
@@ -389,6 +538,7 @@ function PhotoStage({
   onBuild: (toneChoice?: { depth: string; temperature: "warm" | "neutral" | "cool" }) => void;
   busy: boolean;
   phase: "skin" | "building" | null;
+  demoSample: boolean;
 }) {
   const canvasApi = useRef<SampleCanvasHandle | null>(null);
   const [gate, setGate] = useState<{ hex: string; point: SamplePoint } | null>(null);
@@ -459,7 +609,7 @@ function PhotoStage({
         <Pips step={1} />
       </div>
 
-      <SampleCanvas ref={canvasApi} src={photo} ariaLabel="Your photo. Tap the color you are wearing to adjust the lock." onSample={handleSample}>
+      <SampleCanvas ref={canvasApi} src={photo} ariaLabel={demoSample ? "Sample face. Tap a color on it to adjust the lock." : "Your photo. Tap the color you are wearing to adjust the lock."} onSample={handleSample}>
         <ScanLine active={scan} />
         {lock && (
           <LockRing
@@ -468,7 +618,7 @@ function PhotoStage({
           />
         )}
         {!lock && !scan && (
-          <p className="over-hint" aria-hidden>Tap right on the color you're wearing</p>
+          <p className="over-hint" aria-hidden>{demoSample ? "Tap a color on the sample" : "Tap right on the color you're wearing"}</p>
         )}
         {gate && (
           <div className="gate-line" role="status">
@@ -577,7 +727,7 @@ const ROLE_TAGLINE: Record<Look["role"], string> = {
 
 function LooksStage({
   photo, looks, lock, mood, event, onMood, onEvent, pairDirty, onRebuild, onShuffle, onRestart, busy,
-  faceShape, skinHex, lockHex, onOpenCoach, onTeachRole, shown,
+  faceShape, skinHex, lockHex, onOpenCoach, onTeachRole, shown, demoSample,
 }: {
   photo: string | null;
   looks: LooksResult | null;
@@ -595,6 +745,8 @@ function LooksStage({
   faceShape: string | null;
   skinHex: string;
   lockHex: string;
+  /** The attributed fixture, not a photo she took. */
+  demoSample: boolean;
 }) {
   const [showHex, setShowHex] = useState(false);
   const [vibeOpen, setVibeOpen] = useState(false);
@@ -758,7 +910,7 @@ function LooksStage({
     return (
       <section className="stage stage-looks" aria-label="Building your three looks">
         <div className="camera-media build-fill">
-          {photo && <img src={photo} alt="Your photo, dimmed while the looks build" className="dimmed-img" />}
+          {photo && <img src={photo} alt={demoSample ? "Sample face, dimmed while the looks build" : "Your photo, dimmed while the looks build"} className="dimmed-img" />}
           <div className="build-veil" />
           <p className="build-line" role="status" aria-live="polite">
             <span className="dot-pulse" style={{ background: lock.onFaceHex }} />
@@ -1004,9 +1156,9 @@ function LooksStage({
                   <span className="receipt-names">
                     <span className="receipt-name">
                       {r.label}
-                      {r.locked && <> <span className="locked-tag">Locked</span></>}
+                      {r.locked && <span className="locked-tag">Locked</span>}
                     </span>
-                    <span className="receipt-detail">{r.detail}</span>
+                    {r.detail ? <span className="receipt-detail">{r.detail}</span> : null}
                   </span>
                   <span className="receipt-hex">{r.hex}</span>
                 </li>
