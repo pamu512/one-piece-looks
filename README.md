@@ -38,3 +38,9 @@ mock and makes no network calls.
 
 - [apps/server/fixtures/ATTRIBUTION.md](apps/server/fixtures/ATTRIBUTION.md)
 - [apps/client/public/fixtures/ATTRIBUTION.md](apps/client/public/fixtures/ATTRIBUTION.md)
+
+## License
+
+Application code is [MIT](LICENSE). MediaPipe is Apache-2.0. The BiSeNet
+face-parsing weights stay non-commercial under the CelebAMask-HQ terms.
+Details: [docs/LICENSE-NOTES.md](docs/LICENSE-NOTES.md).

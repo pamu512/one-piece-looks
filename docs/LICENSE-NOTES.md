@@ -1,11 +1,18 @@
 # License notes
 
+Application code is under the MIT License in the repository root
+([LICENSE](../LICENSE)), copyright 2026 Anoop Pamu.
+
+That grant does not relicense the third-party components below. Their
+original terms stay in force, including the BiSeNet face-parsing weights.
+
 ## MediaPipe Face Landmarker
 
 `apps/client/public/models/face_landmarker.task` is Google's MediaPipe face
 landmarker (float16). MediaPipe is Apache-2.0. The wasm runtime files under
-`apps/client/public/mediapipe/wasm/` come from the `@mediapipe/tasks-vision`
-npm package the app depends on, so their version always matches the JS bundle.
+`apps/client/public/mediapipe/wasm/` are a committed copy of the wasm from
+`@mediapipe/tasks-vision`, the package the app depends on. Installing a
+newer release of that package does not refresh these files.
 
 This is the primary geometry path: lip ring, mouth hole, eye rings, brow
 arcs, face oval, cheek anchors.
